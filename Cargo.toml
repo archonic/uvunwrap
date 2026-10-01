@@ -1,0 +1,25 @@
+[package]
+name = "uvunwrap"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Pure-Rust automatic UV unwrapping: chart segmentation, LSCM parameterization and atlas packing (lightmap UVs, baking)"
+license = "MIT"
+readme = "README.md"
+keywords = ["uv", "unwrap", "lightmap", "atlas", "parameterization"]
+categories = ["graphics", "rendering", "game-development"]
+
+[features]
+default = ["parallel", "direct-solver"]
+## Parameterize charts in parallel with rayon. Disable for wasm32 without threads.
+parallel = ["dep:rayon"]
+## Solve LSCM with a sparse Cholesky factorization (pure-Rust `faer`). Much
+## faster on large charts; without it an iterative CGLS solver is used.
+direct-solver = ["dep:faer"]
+
+[dependencies]
+rayon = { version = "1.10", optional = true }
+faer = { version = "0.22", optional = true, default-features = false, features = ["std"] }
+
+[profile.test]
+opt-level = 2

@@ -1,0 +1,185 @@
+//! Small f64 vector helpers and 2D computational geometry.
+
+pub(crate) type V2 = [f64; 2];
+pub(crate) type V3 = [f64; 3];
+
+#[inline]
+pub(crate) fn sub3(a: V3, b: V3) -> V3 {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+#[inline]
+pub(crate) fn add3(a: V3, b: V3) -> V3 {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+#[inline]
+pub(crate) fn scale3(a: V3, s: f64) -> V3 {
+    [a[0] * s, a[1] * s, a[2] * s]
+}
+
+#[inline]
+pub(crate) fn dot3(a: V3, b: V3) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+#[inline]
+pub(crate) fn cross3(a: V3, b: V3) -> V3 {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+#[inline]
+pub(crate) fn len3(a: V3) -> f64 {
+    dot3(a, a).sqrt()
+}
+
+/// Normalizes `a`, returning `None` for (near) zero vectors.
+#[inline]
+pub(crate) fn normalize3(a: V3) -> Option<V3> {
+    let l = len3(a);
+    (l > 0.0 && l.is_finite()).then(|| scale3(a, 1.0 / l))
+}
+
+/// Twice the signed area of a 2D triangle (positive = counter-clockwise).
+#[inline]
+pub(crate) fn signed_area2(a: V2, b: V2, c: V2) -> f64 {
+    0.5 * ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
+}
+
+/// Convex hull (Andrew's monotone chain), counter-clockwise, no repeated end point.
+pub(crate) fn convex_hull(points: &[V2]) -> Vec<V2> {
+    let mut pts: Vec<V2> = points.to_vec();
+    pts.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    pts.dedup();
+    if pts.len() < 3 {
+        return pts;
+    }
+    let cross = |o: V2, a: V2, b: V2| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let mut hull: Vec<V2> = Vec::with_capacity(pts.len() * 2);
+    for &p in &pts {
+        while hull.len() >= 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    let lower_len = hull.len() + 1;
+    for &p in pts.iter().rev().skip(1) {
+        while hull.len() >= lower_len && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    hull.pop();
+    hull
+}
+
+/// Rotation angle θ such that rotating points by `-θ` minimizes the area of their
+/// axis-aligned bounding box. Uses the fact that an optimal rectangle shares an edge
+/// with the convex hull.
+pub(crate) fn min_area_rect_angle(hull: &[V2]) -> f64 {
+    if hull.len() < 3 {
+        return 0.0;
+    }
+    let mut best = (f64::INFINITY, 0.0);
+    for i in 0..hull.len() {
+        let p = hull[i];
+        let q = hull[(i + 1) % hull.len()];
+        let theta = (q[1] - p[1]).atan2(q[0] - p[0]);
+        let (s, c) = theta.sin_cos();
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for &h in hull {
+            let r = rotate(h, c, s);
+            for k in 0..2 {
+                lo[k] = lo[k].min(r[k]);
+                hi[k] = hi[k].max(r[k]);
+            }
+        }
+        let area = (hi[0] - lo[0]) * (hi[1] - lo[1]);
+        if area < best.0 {
+            best = (area, theta);
+        }
+    }
+    best.1
+}
+
+/// Rotates `p` by `-θ` given `c = cos θ`, `s = sin θ`.
+#[inline]
+pub(crate) fn rotate(p: V2, c: f64, s: f64) -> V2 {
+    [p[0] * c + p[1] * s, -p[0] * s + p[1] * c]
+}
+
+/// Separating-axis test for two 2D triangles. Returns `true` only if their
+/// interiors overlap by more than `eps`; triangles that merely touch (shared
+/// edge or vertex) are not considered overlapping.
+pub(crate) fn triangles_overlap(a: &[V2; 3], b: &[V2; 3], eps: f64) -> bool {
+    for tri in [a, b] {
+        for i in 0..3 {
+            let p = tri[i];
+            let q = tri[(i + 1) % 3];
+            let axis = [p[1] - q[1], q[0] - p[0]];
+            let len = (axis[0] * axis[0] + axis[1] * axis[1]).sqrt();
+            if len == 0.0 {
+                continue;
+            }
+            let axis = [axis[0] / len, axis[1] / len];
+            let project = |t: &[V2; 3]| {
+                let mut lo = f64::INFINITY;
+                let mut hi = f64::NEG_INFINITY;
+                for v in t {
+                    let d = v[0] * axis[0] + v[1] * axis[1];
+                    lo = lo.min(d);
+                    hi = hi.max(d);
+                }
+                (lo, hi)
+            };
+            let (alo, ahi) = project(a);
+            let (blo, bhi) = project(b);
+            if ahi <= blo + eps || bhi <= alo + eps {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hull_of_square_with_interior_point() {
+        let pts = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.5, 0.5]];
+        assert_eq!(convex_hull(&pts).len(), 4);
+    }
+
+    #[test]
+    fn min_rect_of_rotated_square() {
+        let a = 0.3f64;
+        let (s, c) = a.sin_cos();
+        let pts: Vec<V2> = [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]
+            .iter()
+            .map(|p| [p[0] * c - p[1] * s, p[0] * s + p[1] * c])
+            .collect();
+        let theta = min_area_rect_angle(&convex_hull(&pts));
+        let (s2, c2) = theta.sin_cos();
+        let r: Vec<V2> = pts.iter().map(|&p| rotate(p, c2, s2)).collect();
+        let w = r.iter().map(|p| p[0]).fold(f64::MIN, f64::max) - r.iter().map(|p| p[0]).fold(f64::MAX, f64::min);
+        let h = r.iter().map(|p| p[1]).fold(f64::MIN, f64::max) - r.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+        assert!((w * h - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn overlap_cases() {
+        let t1 = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let shared_edge = [[1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        let shared_vertex = [[1.0, 0.0], [2.0, 0.0], [2.0, 1.0]];
+        let overlapping = [[0.2, 0.2], [1.0, 0.2], [0.2, 1.0]];
+        assert!(!triangles_overlap(&t1, &shared_edge, 1e-12));
+        assert!(!triangles_overlap(&t1, &shared_vertex, 1e-12));
+        assert!(triangles_overlap(&t1, &overlapping, 1e-12));
+    }
+}

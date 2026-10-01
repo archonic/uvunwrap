@@ -31,15 +31,23 @@ cargo run --release --example unwrap -- model.obj out/model
 
 1. **Topology**: welds identical positions, drops triangles too thin for f32
    UVs, and connects faces only across manifold, consistently oriented edges.
-2. **Segmentation**: grows charts from the largest faces, limited by
-   `max_chart_angle` from the chart's average normal.
+2. **Segmentation**: grows charts from the largest planar regions, xatlas
+   style: candidates are ranked by normal deviation (on crease-preserving
+   smoothed normals, limited by `max_chart_angle`), with bonuses for filling
+   boundary notches and penalties for crossing creases. Small charts mostly
+   enclosed by a neighbor are merged, and single-triangle teeth are smoothed
+   off the boundaries.
 3. **Parameterization**: planar projection for flat charts, otherwise Least
    Squares Conformal Maps solved by sparse Cholesky. Results with flipped
    triangles, overlaps or area distortion above `max_area_distortion` are split
-   and retried, so output is always valid.
-4. **Packing**: charts are rotated to their minimum-area bounding rectangle and
-   skyline-packed. Texel density is automatic (fit one page) or fixed (one
-   growing page, or multiple fixed-size pages), with padding and 90° rotation.
+   and retried, so output is always valid. Large, strongly curved charts are
+   split without attempting a solve.
+4. **Packing**: charts are rotated to their minimum-area bounding rectangle,
+   rasterized (conservatively, dilated by the padding) and packed by shape, so
+   they nest into each other's concavities and holes, with 90° rotations.
+   Texel density is automatic (fit one page) or fixed (one growing page, or
+   multiple fixed-size pages). `Packing::Rect` packs bounding rectangles with
+   a skyline packer instead: faster, but less dense.
 
 ## Features
 
@@ -50,25 +58,21 @@ cargo run --release --example unwrap -- model.obj out/model
 
 With no default features the crate has zero dependencies.
 
-## Performance (single core)
+## Performance
 
-| Model | Triangles | Charts | Time | Utilization |
-|---|---|---|---|---|
-| Spot | 5.9K | 46 | 56 ms | 51% |
-| Stanford bunny | 69K | 184 | 0.9 s | 44% |
-| Armadillo | 100K | 866 | 1.9 s | 41% |
+1024×1024 page, 2 texels of padding, release build. Utilization is true
+surface area over atlas area.
+
+| Model | Triangles | Charts | Single core | Multi-core | Utilization |
+|---|---|---|---|---|---|
+| Spot | 5.9K | 38 | 84 ms | 27 ms | 69% |
+| Stanford bunny | 69K | 62 | 0.31 s | 0.12 s | 66% |
+| Armadillo | 100K | 344 | 0.71 s | 0.30 s | 62% |
 
 ## Status and roadmap
 
-Version 0.1: correct and tested, but behind xatlas on quality.
-
-- **Shape-aware packing**: charts are packed by bounding rectangle, so holes and
-  concave space are wasted. Rasterized chart-mask packing (as xatlas does) is
-  the biggest planned improvement, from about 45% toward 70–80% utilization.
-- **Smoother charts**: region growing produces jagged boundaries; costs that
-  favor round, compact charts would reduce seams and splitting.
-- **Speed**: most time goes to large charts that fail validation and are
-  re-solved after splitting; better segmentation fixes both.
+- **Speed**: shape packing on meshes with many large, low-poly charts is the
+  slowest path; a criterion benchmark suite is planned.
 - **Integrations**: `glam` types and a small Bevy crate.
 
 ## License

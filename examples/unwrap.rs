@@ -2,7 +2,7 @@
 //! drawing of each atlas page.
 //!
 //! ```text
-//! cargo run --release --example unwrap -- [input.obj] [output_prefix]
+//! cargo run --release --example unwrap -- [--rect] [input.obj] [output_prefix]
 //! ```
 //!
 //! Without arguments, a built-in torus is unwrapped into `out/torus*`.
@@ -59,7 +59,12 @@ fn torus() -> (Vec<[f32; 3]>, Vec<u32>) {
 }
 
 fn main() {
-    let args: Vec<String> = env::args().skip(1).collect();
+    let mut opts = uvunwrap::Options::default();
+    let mut args: Vec<String> = env::args().skip(1).collect();
+    if let Some(i) = args.iter().position(|a| a == "--rect") {
+        opts.packing = uvunwrap::Packing::Rect;
+        args.remove(i);
+    }
     let (positions, indices, prefix) = match args.first() {
         Some(path) => {
             let (p, i) = load_obj(&fs::read_to_string(path).expect("read input"));
@@ -75,7 +80,7 @@ fn main() {
 
     let start = Instant::now();
     let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices };
-    let atlas = uvunwrap::generate(&[mesh], &uvunwrap::Options::default()).expect("unwrap failed");
+    let atlas = uvunwrap::generate(&[mesh], &opts).expect("unwrap failed");
     let elapsed = start.elapsed();
     let out = &atlas.meshes[0];
     println!(

@@ -13,8 +13,8 @@
 //!    triangles, self-overlap or too much area distortion
 //!    ([`Options::max_area_distortion`]) are split and retried, so the output is
 //!    always valid.
-//! 3. **Packing** — charts are rotated to their minimum-area bounding box and
-//!    packed into one or more atlas pages.
+//! 3. **Packing** — charts are rasterized and packed by shape into one or more
+//!    atlas pages, nesting into each other's concavities ([`Packing`]).
 //!
 //! ```
 //! // A unit quad made of two triangles.
@@ -40,6 +40,7 @@
 #![warn(missing_docs)]
 
 mod geom;
+mod mask;
 mod pack;
 mod param;
 mod segment;
@@ -81,8 +82,22 @@ pub struct Options {
     /// Empty texels around each chart, to avoid bleeding when filtering or
     /// generating mipmaps. Default `2`.
     pub padding: u32,
-    /// Allow rotating charts by 90° during packing. Default `true`.
+    /// Allow rotating charts by multiples of 90° during packing. Default `true`.
     pub allow_rotation: bool,
+    /// Packing algorithm. Default [`Packing::Shape`].
+    pub packing: Packing,
+}
+
+/// How charts are arranged in the atlas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Packing {
+    /// Pack rasterized chart shapes, so charts nest into each other's
+    /// concavities and holes. Denser atlases; slower to pack.
+    #[default]
+    Shape,
+    /// Pack chart bounding rectangles with a skyline packer. Much faster,
+    /// but wastes the space around non-rectangular charts.
+    Rect,
 }
 
 impl Default for Options {
@@ -94,6 +109,7 @@ impl Default for Options {
             texels_per_unit: None,
             padding: 2,
             allow_rotation: true,
+            packing: Packing::Shape,
         }
     }
 }
@@ -256,14 +272,18 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
         })
         .collect();
 
-    let sizes: Vec<[f64; 2]> = per_mesh.iter().flat_map(|(_, c)| c.iter().map(|c| c.size)).collect();
-    let packed = pack::pack(
-        &sizes,
-        options.texels_per_unit.map(f64::from),
-        options.resolution,
-        options.padding,
-        options.allow_rotation,
-    )?;
+    let geoms: Vec<pack::ChartGeom> = per_mesh
+        .iter()
+        .flat_map(|(_, c)| c.iter())
+        .map(|c| pack::ChartGeom { uvs: &c.uvs, tris: &c.face_local, size: c.size, area: c.area })
+        .collect();
+    let packer = pack::Packer {
+        charts: &geoms,
+        padding: options.padding,
+        allow_rotation: options.allow_rotation,
+        method: options.packing,
+    };
+    let packed = pack::pack(&packer, options.texels_per_unit.map(f64::from), options.resolution)?;
     let s = packed.texels_per_unit;
     let (pw, ph) = (packed.width as f64, packed.height as f64);
     let pad = options.padding as f64;
@@ -289,14 +309,15 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
                     first[w as usize] = (ci as u32, l as u32);
                 }
             }
+            let (cw, chh) = mask::content_size(ch.size, s);
             uvs.push(
                 ch.uvs
                     .iter()
                     .map(|&[x, y]| {
-                        // 90° CCW rotation keeps orientation (no mirroring).
-                        let [x, y] = if pl.rotated { [ch.size[1] - y, x] } else { [x, y] };
-                        let tx = pl.x as f64 + pad + x * s;
-                        let ty = pl.y as f64 + pad + y * s;
+                        // Quarter-turn rotations keep orientation (no mirroring).
+                        let [x, y] = mask::rotate_texel([x * s, y * s], pl.rotation, cw, chh);
+                        let tx = pl.x as f64 + pad + x;
+                        let ty = pl.y as f64 + pad + y;
                         [(tx / pw).clamp(0.0, 1.0) as f32, (ty / ph).clamp(0.0, 1.0) as f32]
                     })
                     .collect(),

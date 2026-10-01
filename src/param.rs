@@ -4,7 +4,8 @@
 //! Least Squares Conformal Maps (Lévy et al. 2002), falling back to planar
 //! projection. A result is only accepted if it has no flipped triangles, no
 //! self-overlap and bounded area distortion; otherwise the chart is split in
-//! two and both halves are retried. Single triangles always succeed, so this
+//! two and both halves are retried (large, strongly curved charts are split
+//! without trying). Single triangles always succeed, so this
 //! always terminates with a valid parameterization.
 
 use crate::geom::*;
@@ -33,10 +34,7 @@ pub(crate) fn parameterize_all(topo: &Topology, groups: Vec<Vec<u32>>, max_disto
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
-        groups
-            .into_par_iter()
-            .flat_map_iter(|g| parameterize_group(topo, g, max_distortion))
-            .collect()
+        groups.into_par_iter().flat_map_iter(|g| parameterize_group(topo, g, max_distortion)).collect()
     }
     #[cfg(not(feature = "parallel"))]
     {
@@ -44,28 +42,64 @@ pub(crate) fn parameterize_all(topo: &Topology, groups: Vec<Vec<u32>>, max_disto
     }
 }
 
+/// Charts at least this large are checked for curvature before solving.
+const CURVATURE_CHECK_FACES: usize = 1000;
+/// Total Gaussian curvature (angle deficit, radians) above which a large chart
+/// is split without attempting LSCM: such charts almost never flatten within
+/// the distortion limit, and solving them is the main cost on big meshes.
+const MAX_CURVATURE: f64 = 3.0;
+
 fn parameterize_group(topo: &Topology, faces: Vec<u32>, max_distortion: f64) -> Vec<Chart> {
-    let mut out = Vec::new();
-    let mut stack = vec![faces];
-    while let Some(faces) = stack.pop() {
-        let (verts, local) = build_local(topo, &faces);
-        let planar = planar_projection(topo, &faces, &verts);
-        if faces.len() == 1 || validate(topo, &faces, &local, &planar, 1.02) {
-            out.push(finalize(topo, faces, verts, local, planar));
-            continue;
-        }
+    let (verts, local) = build_local(topo, &faces);
+    let planar = planar_projection(topo, &faces, &verts);
+    if faces.len() == 1 || validate(topo, &faces, &local, &planar, 1.02) {
+        return vec![finalize(topo, faces, verts, local, planar)];
+    }
+    let hopeless = faces.len() >= CURVATURE_CHECK_FACES && total_curvature(topo, &verts, &local).abs() > MAX_CURVATURE;
+    if !hopeless {
         let conformal = lscm(topo, &verts, &local, &planar);
         if validate(topo, &faces, &local, &conformal, max_distortion) {
-            out.push(finalize(topo, faces, verts, local, conformal));
-        } else if validate(topo, &faces, &local, &planar, max_distortion) {
-            out.push(finalize(topo, faces, verts, local, planar));
-        } else {
-            let (a, b) = split(topo, &faces);
-            stack.push(a);
-            stack.push(b);
+            return vec![finalize(topo, faces, verts, local, conformal)];
+        }
+        if validate(topo, &faces, &local, &planar, max_distortion) {
+            return vec![finalize(topo, faces, verts, local, planar)];
         }
     }
-    out
+    let (a, b) = split(topo, &faces);
+    #[cfg(feature = "parallel")]
+    let (mut a, b) = rayon::join(|| parameterize_group(topo, a, max_distortion), || parameterize_group(topo, b, max_distortion));
+    #[cfg(not(feature = "parallel"))]
+    let (mut a, b) = (parameterize_group(topo, a, max_distortion), parameterize_group(topo, b, max_distortion));
+    a.extend(b);
+    a
+}
+
+/// Total Gaussian curvature of the chart: the sum of angle deficits
+/// `2π - Σ angles` over its interior vertices.
+fn total_curvature(topo: &Topology, verts: &[u32], local: &[[u32; 3]]) -> f64 {
+    let n = verts.len();
+    let mut angle = vec![0.0; n];
+    // Edge use count parity marks boundary edges (used by one face).
+    let mut edges: HashMap<(u32, u32), bool> = HashMap::with_capacity(local.len() * 2);
+    for t in local {
+        let p = t.map(|l| topo.positions[verts[l as usize] as usize]);
+        for k in 0..3 {
+            let a = sub3(p[(k + 1) % 3], p[k]);
+            let b = sub3(p[(k + 2) % 3], p[k]);
+            angle[t[k] as usize] += (dot3(a, b) / (len3(a) * len3(b))).clamp(-1.0, 1.0).acos();
+            let (u, v) = (t[k], t[(k + 1) % 3]);
+            let e = edges.entry((u.min(v), u.max(v))).or_insert(false);
+            *e = !*e;
+        }
+    }
+    let mut boundary = vec![false; n];
+    for (&(u, v), &odd) in &edges {
+        if odd {
+            boundary[u as usize] = true;
+            boundary[v as usize] = true;
+        }
+    }
+    (0..n).filter(|&i| !boundary[i]).map(|i| std::f64::consts::TAU - angle[i]).sum()
 }
 
 fn build_local(topo: &Topology, faces: &[u32]) -> (Vec<u32>, Vec<[u32; 3]>) {

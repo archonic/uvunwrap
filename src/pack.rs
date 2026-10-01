@@ -1,6 +1,10 @@
-//! Atlas packing of chart bounding rectangles with a bottom-left skyline packer.
+//! Atlas packing. Charts are placed either by their rasterized shape (see
+//! [`crate::mask`]) or by their bounding rectangle with a bottom-left skyline
+//! packer; both share the texel density search.
 
-use crate::Error;
+use crate::geom::V2;
+use crate::mask::{chart_masks, content_size, ChartMasks, Page};
+use crate::{Error, Packing};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Placement {
@@ -8,8 +12,8 @@ pub(crate) struct Placement {
     /// Top-left corner of the padded rectangle, in texels.
     pub x: u32,
     pub y: u32,
-    /// Chart content is rotated by 90° counter-clockwise.
-    pub rotated: bool,
+    /// Quarter turns counter-clockwise applied to the chart content.
+    pub rotation: u8,
 }
 
 pub(crate) struct PackResult {
@@ -118,9 +122,108 @@ impl Skyline {
     }
 }
 
-fn rects(sizes: &[[f64; 2]], s: f64, padding: u32) -> Vec<(u32, u32)> {
-    let side = |v: f64| ((v * s).ceil().clamp(1.0, (u32::MAX / 4) as f64) as u32).saturating_add(2 * padding);
-    sizes.iter().map(|sz| (side(sz[0]), side(sz[1]))).collect()
+/// What the packer needs to know about a chart.
+pub(crate) struct ChartGeom<'a> {
+    /// UVs in world units, minimum at the origin.
+    pub uvs: &'a [V2],
+    pub tris: &'a [[u32; 3]],
+    pub size: V2,
+    pub area: f64,
+}
+
+pub(crate) struct Packer<'a> {
+    pub charts: &'a [ChartGeom<'a>],
+    pub padding: u32,
+    pub allow_rotation: bool,
+    pub method: Packing,
+}
+
+/// Placements plus the used `(width, height)` of each page.
+type Trial = (Vec<Placement>, Vec<(u32, u32)>);
+
+impl Packer<'_> {
+    fn rects(&self, s: f64) -> Vec<(u32, u32)> {
+        let pad = 2 * self.padding;
+        self.charts
+            .iter()
+            .map(|c| {
+                let (w, h) = content_size(c.size, s);
+                (w.saturating_add(pad), h.saturating_add(pad))
+            })
+            .collect()
+    }
+
+    fn masks(&self, s: f64) -> Vec<ChartMasks> {
+        let rotations = if self.allow_rotation { 4 } else { 1 };
+        let one = |c: &ChartGeom| chart_masks(c.uvs, c.tris, c.size, s, self.padding, rotations);
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
+            self.charts.par_iter().map(one).collect()
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            self.charts.iter().map(one).collect()
+        }
+    }
+
+    /// Packs at density `s` into pages of `width × height`, using at most
+    /// `max_pages`. `None` if it doesn't fit.
+    fn trial(&self, s: f64, width: u32, height: u32, max_pages: usize) -> Option<Trial> {
+        match self.method {
+            Packing::Rect => {
+                let r = self.rects(s);
+                let (placements, pages) = try_pack(&r, width, height, max_pages, self.allow_rotation)?;
+                Some((placements, pages.iter().map(|p| (p.width, p.used_height)).collect()))
+            }
+            Packing::Shape => shape_pack(&self.masks(s), width, height, max_pages),
+        }
+    }
+
+}
+
+fn shape_pack(masks: &[ChartMasks], width: u32, height: u32, max_pages: usize) -> Option<Trial> {
+    let mut order: Vec<usize> = (0..masks.len()).collect();
+    // Largest first; perimeter ordering packs slightly denser than area.
+    order.sort_by_key(|&i| (std::cmp::Reverse(masks[i].rot[0].w + masks[i].rot[0].h), i));
+    let mut placements = vec![Placement::default(); masks.len()];
+    let mut pages: Vec<Page> = Vec::new();
+    for i in order {
+        let mut placed = None;
+        for (pi, page) in pages.iter().enumerate() {
+            if let Some((x, y, rotation)) = best_fit(page, &masks[i]) {
+                placed = Some((pi, x, y, rotation));
+                break;
+            }
+        }
+        if placed.is_none() {
+            if pages.len() >= max_pages {
+                return None;
+            }
+            pages.push(Page::new(width, height));
+            let (x, y, rotation) = best_fit(pages.last().unwrap(), &masks[i])?;
+            placed = Some((pages.len() - 1, x, y, rotation));
+        }
+        let (pi, x, y, rotation) = placed.unwrap();
+        pages[pi].insert(&masks[i].rot[rotation as usize], x, y);
+        placements[i] = Placement { page: pi as u32, x, y, rotation };
+    }
+    Some((placements, pages.iter().map(|p| (p.used_width, p.used_height)).collect()))
+}
+
+/// The rotation whose lowest placement has the lowest top edge.
+fn best_fit(page: &Page, masks: &ChartMasks) -> Option<(u32, u32, u8)> {
+    let mut best: Option<(u64, u32, u32, u8)> = None;
+    for (k, m) in masks.rot.iter().enumerate() {
+        let limit = best.map_or(u64::MAX, |b| b.0);
+        if let Some((x, y)) = page.find(m, limit) {
+            let top = y as u64 + m.h as u64;
+            if best.map_or(true, |b| top < b.0) {
+                best = Some((top, x, y, k as u8));
+            }
+        }
+    }
+    best.map(|(_, x, y, k)| (x, y, k))
 }
 
 fn order(r: &[(u32, u32)]) -> Vec<usize> {
@@ -137,7 +240,7 @@ fn try_pack(r: &[(u32, u32)], width: u32, height: u32, max_pages: usize, allow_r
         let mut done = false;
         for (pi, page) in pages.iter_mut().enumerate() {
             if let Some((x, y, rotated)) = page.place(w, h, allow_rotation) {
-                placements[i] = Placement { page: pi as u32, x, y, rotated };
+                placements[i] = Placement { page: pi as u32, x, y, rotation: rotated as u8 };
                 done = true;
                 break;
             }
@@ -148,28 +251,22 @@ fn try_pack(r: &[(u32, u32)], width: u32, height: u32, max_pages: usize, allow_r
             }
             let mut page = Skyline::new(width, height);
             let (x, y, rotated) = page.place(w, h, allow_rotation)?;
-            placements[i] = Placement { page: pages.len() as u32, x, y, rotated };
+            placements[i] = Placement { page: pages.len() as u32, x, y, rotation: rotated as u8 };
             pages.push(page);
         }
     }
     Some((placements, pages))
 }
 
-pub(crate) fn pack(
-    sizes: &[[f64; 2]],
-    texels_per_unit: Option<f64>,
-    resolution: u32,
-    padding: u32,
-    allow_rotation: bool,
-) -> Result<PackResult, Error> {
-    let bbox_area: f64 = sizes.iter().map(|s| s[0] * s[1]).sum();
-    if sizes.is_empty() || !(bbox_area > 0.0) {
+pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32) -> Result<PackResult, Error> {
+    let area: f64 = p.charts.iter().map(|c| c.area).sum();
+    if p.charts.is_empty() || !(area > 0.0) {
         let res = resolution.max(1);
         return Ok(PackResult {
-            placements: vec![Placement::default(); sizes.len()],
+            placements: vec![Placement::default(); p.charts.len()],
             width: res,
             height: res,
-            pages: if sizes.is_empty() { 0 } else { 1 },
+            pages: if p.charts.is_empty() { 0 } else { 1 },
             texels_per_unit: texels_per_unit.unwrap_or(1.0),
         });
     }
@@ -177,35 +274,66 @@ pub(crate) fn pack(
     match (texels_per_unit, resolution) {
         // Fixed density, unbounded single page: pick a near-square width.
         (Some(s), 0) => {
-            let r = rects(sizes, s, padding);
+            let r = p.rects(s);
+            let bbox: f64 = r.iter().map(|&(w, h)| w as f64 * h as f64).sum();
+            let fill = if p.method == Packing::Shape { 0.8 } else { 1.15 };
             let max_side = r.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(1);
-            let area: f64 = r.iter().map(|&(w, h)| w as f64 * h as f64).sum();
-            let width = max_side.max((area * 1.15).sqrt().ceil() as u32);
-            let (placements, pages) = try_pack(&r, width, u32::MAX, 1, allow_rotation).expect("unbounded page always fits");
-            Ok(PackResult { placements, width, height: pages[0].used_height.max(1), pages: 1, texels_per_unit: s })
+            let width = max_side.max((bbox * fill).sqrt().ceil() as u32);
+            let (placements, used) = p.trial(s, width, u32::MAX, 1).expect("unbounded page always fits");
+            Ok(PackResult { placements, width: used[0].0.max(1), height: used[0].1.max(1), pages: 1, texels_per_unit: s })
         }
         // Fixed density, fixed page size: as many pages as needed.
         (Some(s), res) => {
-            let r = rects(sizes, s, padding);
-            if let Some(&(w, h)) = r.iter().find(|&&(w, h)| w.max(h) > res) {
+            if let Some(&(w, h)) = p.rects(s).iter().find(|&&(w, h)| w.max(h) > res) {
                 return Err(Error::ChartTooLarge { width: w, height: h, resolution: res });
             }
-            let (placements, pages) = try_pack(&r, res, res, usize::MAX, allow_rotation)
+            let (placements, used) = p
+                .trial(s, res, res, usize::MAX)
                 .ok_or(Error::ChartTooLarge { width: res + 1, height: res + 1, resolution: res })?;
-            Ok(PackResult { placements, width: res, height: res, pages: pages.len() as u32, texels_per_unit: s })
+            Ok(PackResult { placements, width: res, height: res, pages: used.len() as u32, texels_per_unit: s })
         }
         // Automatic density: the largest density that fits a single page.
         (None, res) => {
             let res = if res == 0 { 1024 } else { res };
-            let mut hi = (res as f64 * res as f64 / bbox_area).sqrt();
-            let mut lo = 0.0;
+            let fits = |s: f64| p.trial(s, res, res, 1).map(|(pl, used)| (pl, s, used[0].1));
+            let bbox: f64 = p.charts.iter().map(|c| c.size[0] * c.size[1]).sum();
+            let full = res as f64 * res as f64;
             let mut best = None;
+            let (mut lo, mut hi);
+            if p.method == Packing::Rect {
+                (lo, hi) = (0.0, (full / bbox).sqrt());
+            } else {
+                // Rectangles are a valid shape packing, so the skyline result
+                // is a good lower bound; 100% coverage bounds it from above.
+                let rect = Packer { method: Packing::Rect, ..*p };
+                lo = match pack(&rect, None, res) {
+                    Ok(r) if r.pages == 1 => r.texels_per_unit,
+                    _ => 0.0,
+                };
+                hi = (full / area).sqrt();
+                while lo > 0.0 {
+                    match fits(lo) {
+                        Some(b) => {
+                            best = Some(b);
+                            break;
+                        }
+                        None => lo *= 0.95,
+                    }
+                    if lo < hi * 1e-3 {
+                        lo = 0.0;
+                    }
+                }
+            }
+            // Bisect until within 0.25%.
             for _ in 0..24 {
-                let mid = 0.5 * (lo + hi);
-                match try_pack(&rects(sizes, mid, padding), res, res, 1, allow_rotation) {
-                    Some((placements, pages)) => {
+                if best.is_some() && hi < lo * 1.0025 {
+                    break;
+                }
+                let mid = if lo > 0.0 { (lo * hi).sqrt() } else { 0.5 * hi };
+                match fits(mid) {
+                    Some(b) => {
                         lo = mid;
-                        best = Some((placements, mid, pages[0].used_height));
+                        best = Some(b);
                     }
                     None => hi = mid,
                 }
@@ -217,8 +345,8 @@ pub(crate) fn pack(
                 }
                 // Too many charts for one page even at minimal density.
                 None => {
-                    let s = 0.5 * (res as f64 * res as f64 / bbox_area).sqrt();
-                    pack(sizes, Some(s), res, padding, allow_rotation)
+                    let s = 0.5 * (full / bbox).sqrt();
+                    pack(p, Some(s), res)
                 }
             }
         }
@@ -237,7 +365,7 @@ mod tests {
             .iter()
             .zip(&r)
             .map(|(p, &(w, h))| {
-                let (w, h) = if p.rotated { (h, w) } else { (w, h) };
+                let (w, h) = if p.rotation == 1 { (h, w) } else { (w, h) };
                 (p.page, p.x, p.y, p.x + w, p.y + h)
             })
             .collect();

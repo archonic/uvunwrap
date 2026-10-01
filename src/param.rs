@@ -52,20 +52,25 @@ const MAX_CURVATURE: f64 = 3.0;
 fn parameterize_group(topo: &Topology, faces: Vec<u32>, max_distortion: f64) -> Vec<Chart> {
     let (verts, local) = build_local(topo, &faces);
     let planar = planar_projection(topo, &faces, &verts);
-    if faces.len() == 1 || validate(topo, &faces, &local, &planar, 1.02) {
+    if faces.len() == 1 || validate(topo, &faces, &local, &planar, 1.02).is_ok() {
         return vec![finalize(topo, faces, verts, local, planar)];
     }
     let hopeless = faces.len() >= CURVATURE_CHECK_FACES && total_curvature(topo, &verts, &local).abs() > MAX_CURVATURE;
+    let mut overlap = None;
     if !hopeless {
         let conformal = lscm(topo, &verts, &local, &planar);
-        if validate(topo, &faces, &local, &conformal, max_distortion) {
-            return vec![finalize(topo, faces, verts, local, conformal)];
+        match validate(topo, &faces, &local, &conformal, max_distortion) {
+            Ok(()) => return vec![finalize(topo, faces, verts, local, conformal)],
+            Err(pair) => overlap = pair,
         }
-        if validate(topo, &faces, &local, &planar, max_distortion) {
+        if validate(topo, &faces, &local, &planar, max_distortion).is_ok() {
             return vec![finalize(topo, faces, verts, local, planar)];
         }
     }
-    let (a, b) = split(topo, &faces);
+    // Overlaps usually come from a local fold in the surface, which no
+    // flattening of this chart can fix: split between the two overlapping
+    // triangles so a single split separates them.
+    let (a, b) = split(topo, &faces, overlap);
     #[cfg(feature = "parallel")]
     let (mut a, b) = rayon::join(|| parameterize_group(topo, a, max_distortion), || parameterize_group(topo, b, max_distortion));
     #[cfg(not(feature = "parallel"))]
@@ -231,38 +236,52 @@ fn lscm(topo: &Topology, verts: &[u32], local: &[[u32; 3]], init: &[V2]) -> Vec<
 
 /// Accepts a parameterization only if no triangle is flipped or degenerate, the
 /// per-triangle area ratio (after normalizing total area) stays within
-/// `[1/max_distortion, max_distortion]`, and no two triangles overlap.
-fn validate(topo: &Topology, faces: &[u32], local: &[[u32; 3]], uv: &[V2], max_distortion: f64) -> bool {
+/// `[1/max_distortion, max_distortion]`, and no two triangles overlap. On
+/// failure due to an overlap, returns one overlapping pair (chart face indices).
+fn validate(topo: &Topology, faces: &[u32], local: &[[u32; 3]], uv: &[V2], max_distortion: f64) -> Result<(), Option<(u32, u32)>> {
     if uv.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {
-        return false;
+        return Err(None);
     }
     let areas: Vec<f64> = local.iter().map(|t| signed_area2(uv[t[0] as usize], uv[t[1] as usize], uv[t[2] as usize])).collect();
     let total_uv: f64 = areas.iter().sum();
     let total_3d: f64 = faces.iter().map(|&f| topo.areas[f as usize]).sum();
     if !(total_uv > 0.0) || !(total_3d > 0.0) {
-        return false;
+        return Err(None);
     }
     let min_area = total_uv * 1e-12;
     let scale = total_3d / total_uv;
     for (k, &f) in faces.iter().enumerate() {
         if areas[k] <= min_area {
-            return false;
+            return Err(None);
         }
         let ratio = areas[k] * scale / topo.areas[f as usize];
         if ratio > max_distortion || ratio * max_distortion < 1.0 {
-            return false;
+            return Err(None);
         }
     }
-    !has_overlaps(local, uv, total_uv)
+    match first_overlap(local, uv, total_uv) {
+        None => Ok(()),
+        pair => Err(pair),
+    }
 }
 
-/// Grid-accelerated pairwise triangle overlap test.
-fn has_overlaps(local: &[[u32; 3]], uv: &[V2], total_area: f64) -> bool {
+/// Grid-accelerated pairwise triangle overlap test: the first overlapping pair
+/// of chart faces, if any. A degenerate layout reports `(0, 0)`.
+fn first_overlap(local: &[[u32; 3]], uv: &[V2], total_area: f64) -> Option<(u32, u32)> {
     let n = local.len();
     if n < 2 {
-        return false;
+        return None;
     }
     let tris: Vec<[V2; 3]> = local.iter().map(|t| t.map(|l| uv[l as usize])).collect();
+    let boxes: Vec<[V2; 2]> = tris
+        .iter()
+        .map(|t| {
+            [
+                [t[0][0].min(t[1][0]).min(t[2][0]), t[0][1].min(t[1][1]).min(t[2][1])],
+                [t[0][0].max(t[1][0]).max(t[2][0]), t[0][1].max(t[1][1]).max(t[2][1])],
+            ]
+        })
+        .collect();
     let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     for p in uv {
         for k in 0..2 {
@@ -272,38 +291,65 @@ fn has_overlaps(local: &[[u32; 3]], uv: &[V2], total_area: f64) -> bool {
     }
     let cell = (2.0 * (total_area / n as f64).sqrt()).max((hi[0] - lo[0]).max(hi[1] - lo[1]) / 1024.0);
     if !(cell > 0.0) {
-        return true;
+        return Some((0, 0));
     }
     let gx = (((hi[0] - lo[0]) / cell) as usize + 1).min(1024);
     let gy = (((hi[1] - lo[1]) / cell) as usize + 1).min(1024);
-    let cell_of = |v: f64, k: usize, g: usize| (((v - lo[k]) / cell) as usize).min(g - 1);
-    let mut grid: Vec<Vec<u32>> = vec![Vec::new(); gx * gy];
-    for (i, t) in tris.iter().enumerate() {
-        let tlo = [t[0][0].min(t[1][0]).min(t[2][0]), t[0][1].min(t[1][1]).min(t[2][1])];
-        let thi = [t[0][0].max(t[1][0]).max(t[2][0]), t[0][1].max(t[1][1]).max(t[2][1])];
-        for y in cell_of(tlo[1], 1, gy)..=cell_of(thi[1], 1, gy) {
-            for x in cell_of(tlo[0], 0, gx)..=cell_of(thi[0], 0, gx) {
-                grid[y * gx + x].push(i as u32);
+    let cell_of = |p: V2| ((((p[0] - lo[0]) / cell) as usize).min(gx - 1), (((p[1] - lo[1]) / cell) as usize).min(gy - 1));
+    // Bucket triangles by the grid cells their bounding boxes cover (CSR).
+    let mut start = vec![0u32; gx * gy + 1];
+    for b in &boxes {
+        let ((x0, y0), (x1, y1)) = (cell_of(b[0]), cell_of(b[1]));
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                start[y * gx + x + 1] += 1;
             }
         }
     }
-    let mut pairs: Vec<u64> = Vec::new();
-    for c in &grid {
-        for (k, &a) in c.iter().enumerate() {
-            for &b in &c[k + 1..] {
-                pairs.push(((a.min(b) as u64) << 32) | a.max(b) as u64);
+    for c in 0..gx * gy {
+        start[c + 1] += start[c];
+    }
+    let mut fill = start.clone();
+    let mut items = vec![0u32; start[gx * gy] as usize];
+    for (i, b) in boxes.iter().enumerate() {
+        let ((x0, y0), (x1, y1)) = (cell_of(b[0]), cell_of(b[1]));
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                items[fill[y * gx + x] as usize] = i as u32;
+                fill[y * gx + x] += 1;
             }
         }
     }
-    pairs.sort_unstable();
-    pairs.dedup();
     let eps = total_area.sqrt() * 1e-9;
-    pairs.iter().any(|&p| triangles_overlap(&tris[(p >> 32) as usize], &tris[(p & 0xffff_ffff) as usize], eps))
+    for y in 0..gy {
+        for x in 0..gx {
+            let c = &items[start[y * gx + x] as usize..start[y * gx + x + 1] as usize];
+            for (k, &a) in c.iter().enumerate() {
+                let ba = boxes[a as usize];
+                for &b in &c[k + 1..] {
+                    let bb = boxes[b as usize];
+                    if ba[1][0] < bb[0][0] || bb[1][0] < ba[0][0] || ba[1][1] < bb[0][1] || bb[1][1] < ba[0][1] {
+                        continue;
+                    }
+                    // Test each pair once: in the cell holding the minimum
+                    // corner of the two boxes' intersection.
+                    if cell_of([ba[0][0].max(bb[0][0]), ba[0][1].max(bb[0][1])]) != (x, y) {
+                        continue;
+                    }
+                    if triangles_overlap(&tris[a as usize], &tris[b as usize], eps) {
+                        return Some((a.min(b), a.max(b)));
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Splits a chart into two edge-connected halves: a graph-distance Voronoi
-/// split between two mutually distant faces.
-fn split(topo: &Topology, faces: &[u32]) -> (Vec<u32>, Vec<u32>) {
+/// split between two seed faces (chart face indices), by default two mutually
+/// distant ones.
+fn split(topo: &Topology, faces: &[u32], seeds: Option<(u32, u32)>) -> (Vec<u32>, Vec<u32>) {
     let index: HashMap<u32, usize> = faces.iter().enumerate().map(|(i, &f)| (f, i)).collect();
     let bfs = |start: usize| -> Vec<u32> {
         let mut dist = vec![u32::MAX; faces.len()];
@@ -322,10 +368,16 @@ fn split(topo: &Topology, faces: &[u32]) -> (Vec<u32>, Vec<u32>) {
         dist
     };
     let farthest = |d: &[u32]| (0..d.len()).filter(|&i| d[i] != u32::MAX).max_by_key(|&i| d[i]).unwrap_or(0);
-    let a = farthest(&bfs(0));
-    let da = bfs(a);
-    let b = farthest(&da);
-    let db = bfs(b);
+    let (da, db) = match seeds {
+        Some((a, b)) if a != b => (bfs(a as usize), bfs(b as usize)),
+        _ => {
+            let a = farthest(&bfs(0));
+            let da = bfs(a);
+            let b = farthest(&da);
+            let db = bfs(b);
+            (da, db)
+        }
+    };
     let (mut left, mut right) = (Vec::new(), Vec::new());
     for (i, &f) in faces.iter().enumerate() {
         if da[i] <= db[i] {

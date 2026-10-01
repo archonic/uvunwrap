@@ -44,6 +44,9 @@ pub(crate) struct Mask {
     long_len: u32,
     /// Longest span of each row.
     row_long: Vec<u32>,
+    /// Rows in coarse-to-fine order (ends, middle, quarters, ...): a collision
+    /// is usually found within the first few.
+    order: Vec<u32>,
     /// Number of covered texels.
     pub area: u64,
 }
@@ -78,6 +81,7 @@ impl Mask {
             m.row_long.push(long);
             m.row_start.push(m.spans.len() as u32);
         }
+        m.order = coarse_to_fine(m.h);
         m
     }
 
@@ -109,8 +113,32 @@ impl Mask {
         m.long_len = self.long_len;
         m.long_start = self.w - self.long_start - self.long_len;
         m.row_long = self.row_long.iter().rev().copied().collect();
+        m.order = coarse_to_fine(m.h);
         m
     }
+}
+
+/// `0..h` ordered by breadth-first bisection: `0, h-1, h/2, h/4, 3h/4, ...`.
+fn coarse_to_fine(h: u32) -> Vec<u32> {
+    let mut order = Vec::with_capacity(h as usize);
+    if h == 0 {
+        return order;
+    }
+    order.push(0);
+    if h > 1 {
+        order.push(h - 1);
+    }
+    let mut queue = std::collections::VecDeque::from([(0u32, h - 1)]);
+    while let Some((a, b)) = queue.pop_front() {
+        if b - a < 2 {
+            continue;
+        }
+        let mid = a + (b - a) / 2;
+        order.push(mid);
+        queue.push_back((a, mid));
+        queue.push_back((mid, b));
+    }
+    order
 }
 
 /// Dense bitmap, one `u64` word run per row.
@@ -343,7 +371,7 @@ impl Page {
         };
         let first = *hint;
         check(first)?;
-        for r in 0..m.h {
+        for &r in &m.order {
             if r != first {
                 if let Err(next) = check(r) {
                     *hint = r;
@@ -473,6 +501,16 @@ mod tests {
             for r in 0..d.h {
                 assert_eq!(d.row(r), direct.row(r), "rotation {k}, row {r}");
             }
+        }
+    }
+
+    #[test]
+    fn coarse_to_fine_is_a_permutation() {
+        for h in 0..40 {
+            let mut o = coarse_to_fine(h);
+            assert_eq!(o[..2.min(h as usize)], [0, h.saturating_sub(1)][..2.min(h as usize)]);
+            o.sort();
+            assert_eq!(o, (0..h).collect::<Vec<_>>(), "h = {h}");
         }
     }
 

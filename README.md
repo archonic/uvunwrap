@@ -60,19 +60,23 @@ With no default features the crate has zero dependencies.
 
 ## Performance
 
-1024×1024 page, 2 texels of padding, release build. Utilization is true
-surface area over atlas area.
+1024×1024 page, 2 texels of padding, release build, Apple M5 (10 cores). Utilization
+is true surface area over atlas area.
 
 | Model | Triangles | Charts | Single core | Multi-core | Utilization |
 |---|---|---|---|---|---|
-| Spot | 5.9K | 38 | 84 ms | 27 ms | 69% |
-| Stanford bunny | 69K | 62 | 0.31 s | 0.12 s | 66% |
-| Armadillo | 100K | 344 | 0.71 s | 0.30 s | 62% |
+| Spot | 5.9K | 38 | 34 ms | 19 ms | 68% |
+| Stanford bunny | 69K | 58 | 0.19 s | 82 ms | 65% |
+| Armadillo | 100K | 257 | 0.40 s | 0.16 s | 60% |
+| Nefertiti | 100K | 456 | 0.74 s | 0.40 s | 64% |
+| Igea | 269K | 83 | 0.96 s | 0.48 s | 66% |
+
+`cargo bench` runs criterion benchmarks on procedural meshes, plus any of
+`spot`, `beetle`, `bunny`, `armadillo` and `nefertiti` found in `models/` (from
+[common-3d-test-models](https://github.com/alecjacobson/common-3d-test-models)).
 
 ## Status and roadmap
 
-- **Speed**: shape packing on meshes with many large, low-poly charts is the
-  slowest path; a criterion benchmark suite is planned.
 - **Integrations**: `glam` types and a small Bevy crate.
 
 ## License

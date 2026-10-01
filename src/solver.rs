@@ -62,40 +62,107 @@ pub(crate) fn least_squares(a: &mut SparseRows, b: &[f64], x: &mut [f64]) {
 /// numerically positive definite.
 #[cfg(feature = "direct-solver")]
 fn cholesky(a: &SparseRows, b: &[f64], x: &mut [f64]) -> bool {
-    use faer::linalg::solvers::Solve;
-    use faer::sparse::{SparseColMat, Triplet};
-    use faer::{Mat, Side};
+    use faer::dyn_stack::{MemBuffer, MemStack};
+    use faer::sparse::linalg::cholesky::{factorize_symbolic_cholesky, CholeskySymbolicParams, SymmetricOrdering};
+    use faer::sparse::linalg::SupernodalThreshold;
+    use faer::sparse::{SparseColMat, SymbolicSparseColMat};
+    use faer::{Conj, MatMut, Par, Side};
 
+    let (lower, mut atb) = normal_equations(a, b);
     let n = a.ncols;
-    let mut triplets = Vec::with_capacity(a.vals.len() * 4);
-    let mut atb = Mat::<f64>::zeros(n, 1);
+    let symbolic = SymbolicSparseColMat::<usize>::new_checked(n, n, lower.col_ptr, None, lower.row_idx);
+    let m = SparseColMat::<usize, f64>::new(symbolic, lower.vals);
+    // Supernodal is faster than simplicial on LSCM systems of every size we
+    // see, including small ones, so don't let faer choose.
+    let params = CholeskySymbolicParams {
+        supernodal_flop_ratio_threshold: SupernodalThreshold::FORCE_SUPERNODAL,
+        ..Default::default()
+    };
+    let Ok(sym) = factorize_symbolic_cholesky(m.symbolic(), Side::Lower, SymmetricOrdering::Amd, params) else {
+        return false;
+    };
+    let par = Par::Seq;
+    let mut values = vec![0.0; sym.len_val()];
+    let scratch = sym.factorize_numeric_llt_scratch::<f64>(par, Default::default()).or(sym.solve_in_place_scratch::<f64>(1, par));
+    let mut buf = MemBuffer::new(scratch);
+    let Ok(llt) = sym.factorize_numeric_llt(&mut values, m.as_ref(), Side::Lower, Default::default(), par, MemStack::new(&mut buf), Default::default())
+    else {
+        return false;
+    };
+    llt.solve_in_place_with_conj(Conj::No, MatMut::from_column_major_slice_mut(&mut atb, n, 1), par, MemStack::new(&mut buf));
+    if atb.iter().any(|v| !v.is_finite()) {
+        return false;
+    }
+    x.copy_from_slice(&atb);
+    true
+}
+
+/// Lower triangle of a symmetric matrix in compressed sparse column form,
+/// row indices sorted within each column.
+#[cfg_attr(not(feature = "direct-solver"), allow(dead_code))]
+pub(crate) struct LowerCsc {
+    pub col_ptr: Vec<usize>,
+    pub row_idx: Vec<usize>,
+    pub vals: Vec<f64>,
+}
+
+/// Assembles the lower triangle of `AᵀA` and `Aᵀb`, column by column with a
+/// dense accumulator (no global sort of `O(nnz²)` triplets).
+#[cfg_attr(not(feature = "direct-solver"), allow(dead_code))]
+pub(crate) fn normal_equations(a: &SparseRows, b: &[f64]) -> (LowerCsc, Vec<f64>) {
+    let n = a.ncols;
+    // Aᵀ as column lists of (row, value).
+    let mut t_ptr = vec![0usize; n + 1];
+    for &c in &a.cols {
+        t_ptr[c as usize + 1] += 1;
+    }
+    for i in 0..n {
+        t_ptr[i + 1] += t_ptr[i];
+    }
+    let mut fill = t_ptr.clone();
+    let mut t_row = vec![0u32; a.cols.len()];
+    let mut t_val = vec![0.0; a.cols.len()];
+    let mut atb = vec![0.0; n];
     for r in 0..a.nrows() {
-        let (s, e) = (a.row_ptr[r], a.row_ptr[r + 1]);
-        for i in s..e {
-            let (ci, vi) = (a.cols[i] as usize, a.vals[i]);
-            atb[(ci, 0)] += vi * b[r];
-            for j in s..e {
-                let cj = a.cols[j] as usize;
-                if ci >= cj {
-                    triplets.push(Triplet::new(ci, cj, vi * a.vals[j]));
-                }
-            }
+        for k in a.row_ptr[r]..a.row_ptr[r + 1] {
+            let c = a.cols[k] as usize;
+            t_row[fill[c]] = r as u32;
+            t_val[fill[c]] = a.vals[k];
+            fill[c] += 1;
+            atb[c] += a.vals[k] * b[r];
         }
     }
-    let Ok(m) = SparseColMat::<usize, f64>::try_new_from_triplets(n, n, &triplets) else {
-        return false;
-    };
-    let Ok(llt) = m.sp_cholesky(Side::Lower) else {
-        return false;
-    };
-    llt.solve_in_place(atb.as_mut());
-    if (0..n).any(|i| !atb[(i, 0)].is_finite()) {
-        return false;
+
+    let mut out = LowerCsc { col_ptr: Vec::with_capacity(n + 1), row_idx: Vec::new(), vals: Vec::new() };
+    out.col_ptr.push(0);
+    let mut acc = vec![0.0; n];
+    let mut seen = vec![usize::MAX; n];
+    let mut touched: Vec<usize> = Vec::new();
+    for j in 0..n {
+        touched.clear();
+        for p in t_ptr[j]..t_ptr[j + 1] {
+            let (r, arj) = (t_row[p] as usize, t_val[p]);
+            for k in a.row_ptr[r]..a.row_ptr[r + 1] {
+                let i = a.cols[k] as usize;
+                if i < j {
+                    continue;
+                }
+                if seen[i] != j {
+                    seen[i] = j;
+                    acc[i] = 0.0;
+                    touched.push(i);
+                }
+                acc[i] += arj * a.vals[k];
+            }
+        }
+        touched.sort_unstable();
+        for &i in &touched {
+            out.row_idx.push(i);
+            out.vals.push(acc[i]);
+        }
+        out.col_ptr.push(out.row_idx.len());
     }
-    for (i, xi) in x.iter_mut().enumerate() {
-        *xi = atb[(i, 0)];
-    }
-    true
+    (out, atb)
 }
 
 fn dot(a: &[f64], b: &[f64]) -> f64 {
@@ -157,6 +224,33 @@ fn cgls_raw(a: &SparseRows, b: &[f64], x: &mut [f64], max_iter: usize, tol: f64)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normal_equations_match_dense() {
+        // A = [[1, 2, 0], [0, 3, 4], [5, 0, 6], [0, 7, 0]], b = [1, 2, 3, 4]
+        let rows: [&[(usize, f64)]; 4] = [&[(0, 1.0), (1, 2.0)], &[(1, 3.0), (2, 4.0)], &[(0, 5.0), (2, 6.0)], &[(1, 7.0)]];
+        let mut a = SparseRows::new(3);
+        for row in rows {
+            for &(c, v) in row {
+                a.push(c, v);
+            }
+            a.end_row();
+        }
+        let b = [1.0, 2.0, 3.0, 4.0];
+        let (lower, atb) = normal_equations(&a, &b);
+        let dense = |i: usize, j: usize| -> f64 {
+            rows.iter().map(|r| {
+                let get = |c| r.iter().find(|e| e.0 == c).map_or(0.0, |e| e.1);
+                get(i) * get(j)
+            }).sum()
+        };
+        for j in 0..3 {
+            let col: Vec<(usize, f64)> = (lower.col_ptr[j]..lower.col_ptr[j + 1]).map(|k| (lower.row_idx[k], lower.vals[k])).collect();
+            let expect: Vec<(usize, f64)> = (j..3).map(|i| (i, dense(i, j))).filter(|e| e.1 != 0.0).collect();
+            assert_eq!(col, expect, "column {j}");
+        }
+        assert_eq!(atb, vec![16.0, 36.0, 26.0]);
+    }
 
     #[test]
     fn solves_overdetermined_system() {

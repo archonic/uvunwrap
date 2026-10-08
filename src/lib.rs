@@ -88,11 +88,20 @@ pub struct MeshInput<'a> {
     /// scales share one texel density. Also usable as a per-mesh importance
     /// factor. Must be finite and `> 0`. Default `1`.
     pub scale: f32,
+    /// Scales of the instances of this mesh, each multiplying `scale`. Empty
+    /// (the default): the mesh's charts are packed into the atlas directly and
+    /// its UVs are atlas coordinates. Otherwise the mesh is unwrapped once,
+    /// its UVs cover `[0, 1]` of its own layout, and each instance gets its own
+    /// unrotated rectangle on one page holding that layout at the instance's
+    /// scale ([`OutputMesh::instances`]). This is how engines lightmap meshes
+    /// drawn several times (e.g. Bevy's `Lightmap::uv_rect`), and with a single
+    /// instance it keeps a mesh on one page. Each must be finite and `> 0`.
+    pub instances: &'a [f32],
 }
 
 impl Default for MeshInput<'_> {
     fn default() -> Self {
-        MeshInput { positions: &[], indices: &[], face_materials: None, face_ignore: None, scale: 1.0 }
+        MeshInput { positions: &[], indices: &[], face_materials: None, face_ignore: None, scale: 1.0, instances: &[] }
     }
 }
 
@@ -193,6 +202,21 @@ pub struct OutputMesh {
     pub vertices: Vec<OutputVertex>,
     /// Same triangles as the input, indexing `vertices`.
     pub indices: Vec<u32>,
+    /// One rectangle per entry of [`MeshInput::instances`] (empty if none).
+    pub instances: Vec<InstanceRect>,
+}
+
+/// Where one instance of a mesh lives in the atlas. The instance's texture
+/// coordinate for a vertex is `min + uv * (max - min)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InstanceRect {
+    /// Atlas page.
+    pub page: u32,
+    /// Corner of the rectangle with the smallest coordinates, in `[0, 1]` page
+    /// coordinates.
+    pub min: [f32; 2],
+    /// Opposite corner.
+    pub max: [f32; 2],
 }
 
 /// A vertex of an [`OutputMesh`].
@@ -200,13 +224,16 @@ pub struct OutputMesh {
 pub struct OutputVertex {
     /// Index of the input vertex this vertex was created from.
     pub xref: u32,
-    /// Texture coordinate in `[0, 1]`, relative to its page. `v` grows with the
-    /// texel row (row 0 at `v = 0`); flip it if your convention differs.
+    /// Texture coordinate in `[0, 1]`, relative to its page (or, for meshes
+    /// with [`MeshInput::instances`], to each instance's rectangle). `v` grows
+    /// with the texel row (row 0 at `v = 0`); flip it if your convention
+    /// differs.
     pub uv: [f32; 2],
     /// Global chart id, or `None` for vertices only used by degenerate or
     /// ignored triangles that have no charted corner.
     pub chart: Option<u32>,
-    /// Atlas page this vertex belongs to.
+    /// Atlas page this vertex belongs to (`0` for meshes with instances; see
+    /// [`InstanceRect::page`]).
     pub page: u32,
 }
 
@@ -246,7 +273,7 @@ pub enum Error {
         /// Number of triangles in the mesh.
         face_count: usize,
     },
-    /// [`MeshInput::scale`] is not finite and positive.
+    /// [`MeshInput::scale`] or an instance scale is not finite and positive.
     InvalidScale {
         /// Mesh position in the input slice.
         mesh: usize,
@@ -327,7 +354,7 @@ fn validate_mesh(mi: usize, m: &MeshInput<'_>) -> Result<(), Error> {
     if let Some(len) = lens.into_iter().flatten().find(|&l| l != face_count) {
         return Err(Error::FaceDataLength { mesh: mi, len, face_count });
     }
-    if !(m.scale > 0.0 && m.scale.is_finite()) {
+    if !(m.scale > 0.0 && m.scale.is_finite()) || m.instances.iter().any(|k| !(*k > 0.0 && k.is_finite())) {
         return Err(Error::InvalidScale { mesh: mi });
     }
     Ok(())
@@ -355,13 +382,25 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
         })
         .collect();
 
-    let geoms: Vec<pack::ChartGeom> = per_mesh
+    // Charts of meshes without instances are packed directly; meshes with
+    // instances become tiles.
+    let geoms: Vec<Vec<pack::ChartGeom>> = per_mesh
         .iter()
-        .flat_map(|(_, c)| c.iter())
-        .map(|c| pack::ChartGeom { uvs: &c.uvs, tris: &c.face_local, size: c.size, area: c.area })
+        .map(|(_, charts)| charts.iter().map(|c| pack::ChartGeom { uvs: &c.uvs, tris: &c.face_local, size: c.size, area: c.area }).collect())
+        .collect();
+    let direct: Vec<pack::ChartGeom> =
+        meshes.iter().zip(&geoms).filter(|(m, _)| m.instances.is_empty()).flat_map(|(_, g)| g.iter().copied()).collect();
+    let scales: Vec<Vec<f64>> = meshes.iter().map(|m| m.instances.iter().map(|&k| k as f64).collect()).collect();
+    let tiles: Vec<pack::TileSpec> = meshes
+        .iter()
+        .zip(&geoms)
+        .zip(&scales)
+        .filter(|((m, _), _)| !m.instances.is_empty())
+        .map(|((_, g), k)| pack::TileSpec { charts: g, scales: k })
         .collect();
     let packer = pack::Packer {
-        charts: &geoms,
+        charts: &direct,
+        tiles: &tiles,
         padding: options.padding,
         allow_rotation: options.allow_rotation,
         method: options.packing,
@@ -375,17 +414,34 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
 
     let mut out_meshes = Vec::with_capacity(meshes.len());
     let mut chart_base = 0usize;
+    let (mut direct_base, mut tile_index) = (0usize, 0usize);
     let mut covered = 0.0;
     for (m, (topo, charts)) in meshes.iter().zip(&per_mesh) {
+        let tile = (!m.instances.is_empty()).then(|| {
+            tile_index += 1;
+            (&packed.tiles[tile_index - 1], &packed.instances[tile_index - 1])
+        });
         let nf = topo.faces.len();
         let mut face_chart = vec![NONE; nf];
         let mut face_slot = vec![0u32; nf];
         let mut first = vec![(NONE, 0u32); topo.positions.len()];
         let mut uvs: Vec<Vec<[f32; 2]>> = Vec::with_capacity(charts.len());
         for (ci, ch) in charts.iter().enumerate() {
-            let pl = packed.placements[chart_base + ci];
-            let s = pack::chart_density(ch.size, s, options.max_chart_size);
-            covered += ch.area * s * s;
+            // Placement, density and the box UVs are relative to: the page, or
+            // the tile's content box (inside its outer padding).
+            let (pl, s, origin, extent) = match tile {
+                None => {
+                    let s = pack::chart_density(ch.size, s, options.max_chart_size);
+                    covered += ch.area * s * s;
+                    (packed.placements[direct_base + ci], s, [0.0, 0.0], [pw, ph])
+                }
+                Some((layout, _)) => {
+                    covered += ch.area * m.instances.iter().map(|&k| (k as f64 * s).powi(2)).sum::<f64>();
+                    let d = layout.density;
+                    let extent = [layout.inner[0] * d, layout.inner[1] * d].map(|e| e.max(f64::MIN_POSITIVE));
+                    (layout.placements[ci], d, [pad, pad], extent)
+                }
+            };
             for (k, &f) in ch.faces.iter().enumerate() {
                 face_chart[f as usize] = ci as u32;
                 face_slot[f as usize] = k as u32;
@@ -402,15 +458,29 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
                     .map(|&[x, y]| {
                         // Quarter-turn rotations keep orientation (no mirroring).
                         let [x, y] = mask::rotate_texel([x * s, y * s], pl.rotation, cw, chh);
-                        let tx = pl.x as f64 + pad + x;
-                        let ty = pl.y as f64 + pad + y;
-                        [(tx / pw).clamp(0.0, 1.0) as f32, (ty / ph).clamp(0.0, 1.0) as f32]
+                        let tx = pl.x as f64 + pad + x - origin[0];
+                        let ty = pl.y as f64 + pad + y - origin[1];
+                        [(tx / extent[0]).clamp(0.0, 1.0) as f32, (ty / extent[1]).clamp(0.0, 1.0) as f32]
                     })
                     .collect(),
             );
         }
 
-        let mut out = OutputMesh { vertices: Vec::new(), indices: Vec::with_capacity(m.indices.len()) };
+        let instances = match tile {
+            None => Vec::new(),
+            Some((layout, placements)) => m
+                .instances
+                .iter()
+                .zip(placements)
+                .map(|(&k, ip)| {
+                    let (x, y) = (ip.x as f64 + pad, ip.y as f64 + pad);
+                    let (w, h) = (layout.inner[0] * k as f64 * s, layout.inner[1] * k as f64 * s);
+                    let uv = |x: f64, y: f64| [(x / pw).clamp(0.0, 1.0) as f32, (y / ph).clamp(0.0, 1.0) as f32];
+                    InstanceRect { page: ip.page, min: uv(x, y), max: uv(x + w, y + h) }
+                })
+                .collect(),
+        };
+        let mut out = OutputMesh { vertices: Vec::new(), indices: Vec::with_capacity(m.indices.len()), instances };
         // (input vertex, chart, local vertex or NONE) -> output vertex.
         let mut lookup: HashMap<(u32, u32, u32), u32> = HashMap::new();
         for (f, tri) in m.indices.chunks_exact(3).enumerate() {
@@ -435,8 +505,8 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
                     let (uv, chart, page) = if ci == NONE {
                         ([0.0, 0.0], None, 0)
                     } else {
-                        let g = chart_base + ci as usize;
-                        (uvs[ci as usize][l as usize], Some(g as u32), packed.placements[g].page)
+                        let page = if tile.is_some() { 0 } else { packed.placements[direct_base + ci as usize].page };
+                        (uvs[ci as usize][l as usize], Some((chart_base + ci as usize) as u32), page)
                     };
                     out.vertices.push(OutputVertex { xref: orig, uv, chart, page });
                     (out.vertices.len() - 1) as u32
@@ -445,6 +515,9 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
             }
         }
         chart_base += charts.len();
+        if tile.is_none() {
+            direct_base += charts.len();
+        }
         out_meshes.push(out);
     }
 

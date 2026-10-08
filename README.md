@@ -29,6 +29,11 @@ seams) become chart boundaries. Optional per-mesh inputs:
 - `face_ignore`: faces that get no UV space.
 - `scale`: mesh-to-world scale, so differently scaled instances share one
   texel density.
+- `instances`: one scale per instance of a mesh drawn several times. The mesh
+  is unwrapped once (its UVs cover `[0, 1]`) and each instance gets its own
+  rectangle in the atlas (`OutputMesh::instances`), the way engines lightmap
+  shared meshes (e.g. Bevy's `Lightmap::uv_rect`). With one instance this
+  also keeps a mesh on a single page.
 
 Try it on an OBJ file (writes an OBJ with `vt` coordinates plus an SVG per page):
 
@@ -102,8 +107,7 @@ is true surface area over atlas area.
 
 - **Determinism**: cross-platform identical output with the fast direct
   solver too, and CI comparing output hashes across architectures.
-- **Multi-mesh**: one page per mesh, per-mesh bounds; progress and
-  cancellation; repacking existing UVs.
+- **Progress and cancellation**; repacking existing UVs.
 - **Integrations** (after the above): a Bevy crate.
 
 ## License

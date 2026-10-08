@@ -85,6 +85,15 @@ impl Mask {
         m
     }
 
+    /// A fully covered `w × h` rectangle.
+    pub(crate) fn rect(w: u32, h: u32) -> Mask {
+        let mut bits = Bits::new(w, h);
+        for y in 0..h {
+            bits.fill(y, 0, w);
+        }
+        Mask::from_bits(&bits)
+    }
+
     /// The mask in units of `b × b` texel blocks: a block is covered if any
     /// of its texels is.
     pub(crate) fn downsample(&self, b: u32) -> Mask {

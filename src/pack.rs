@@ -3,7 +3,7 @@
 //! packer; both share the texel density search.
 
 use crate::geom::V2;
-use crate::mask::{chart_masks, content_size, ChartMasks, Page};
+use crate::mask::{chart_masks, content_size, ChartMasks, Mask, Page};
 use crate::{Error, Packing};
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -17,11 +17,40 @@ pub(crate) struct Placement {
 }
 
 pub(crate) struct PackResult {
+    /// One per chart in [`Packer::charts`].
     pub placements: Vec<Placement>,
+    /// Per tile, one placement per instance (never rotated).
+    pub instances: Vec<Vec<Placement>>,
+    /// Per tile, the layout of its charts.
+    pub tiles: Vec<TileLayout>,
     pub width: u32,
     pub height: u32,
     pub pages: u32,
     pub texels_per_unit: f64,
+}
+
+/// A mesh drawn several times, each instance needing its own atlas region:
+/// its charts are packed once into a local layout, and each instance gets a
+/// rectangle holding that layout at its own scale.
+#[derive(Clone, Copy)]
+pub(crate) struct TileSpec<'a> {
+    pub charts: &'a [ChartGeom<'a>],
+    /// Instance scales (> 0), relative to the chart geometry.
+    pub scales: &'a [f64],
+}
+
+/// The local layout of a tile's charts.
+#[derive(Clone, Debug)]
+pub(crate) struct TileLayout {
+    /// Chart placements in the layout, in texels at `density`.
+    pub placements: Vec<Placement>,
+    /// Texels per unit of the layout: the atlas density at the smallest
+    /// instance scale, so every instance gets at least the full padding.
+    pub density: f64,
+    /// Size of the layout's content box (inside the outer padding), in chart
+    /// units at scale 1. An instance of scale `k` occupies `inner * k * s`
+    /// texels at atlas density `s`.
+    pub inner: V2,
 }
 
 #[derive(Clone, Copy)]
@@ -139,6 +168,7 @@ pub(crate) fn chart_density(size: V2, s: f64, max_size: u32) -> f64 {
 }
 
 /// What the packer needs to know about a chart.
+#[derive(Clone, Copy)]
 pub(crate) struct ChartGeom<'a> {
     /// UVs in world units, minimum at the origin.
     pub uvs: &'a [V2],
@@ -147,8 +177,10 @@ pub(crate) struct ChartGeom<'a> {
     pub area: f64,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct Packer<'a> {
     pub charts: &'a [ChartGeom<'a>],
+    pub tiles: &'a [TileSpec<'a>],
     pub padding: u32,
     pub allow_rotation: bool,
     pub method: Packing,
@@ -159,28 +191,54 @@ pub(crate) struct Packer<'a> {
     pub block: u32,
 }
 
-/// Placements plus the used `(width, height)` of each page.
+/// Placements (charts, then instances) plus the used `(width, height)` of
+/// each page.
 type Trial = (Vec<Placement>, Vec<(u32, u32)>);
 
-/// Charts rasterized at one density, ready to place: rectangles or masks, in
-/// block units.
-enum Prepared {
-    Rects(Vec<(u32, u32)>),
-    Masks(Vec<ChartMasks>),
+/// Everything to place at one density: the charts, then one rectangle per
+/// tile instance.
+struct Prepared {
+    /// Padded sizes in texels, rounded up to whole blocks.
+    sizes: Vec<(u32, u32)>,
+    /// Whether each item may be rotated.
+    rotatable: Vec<bool>,
+    /// Masks in block units (shape packing only).
+    masks: Vec<ChartMasks>,
+    tiles: Vec<TileLayout>,
 }
 
 impl Packer<'_> {
-    /// Padded chart rectangles in texels, rounded up to whole blocks.
-    fn rects(&self, s: f64) -> Vec<(u32, u32)> {
+    /// Lays out a tile's charts at the density of its smallest instance.
+    fn layout_tile(&self, t: &TileSpec<'_>, s: f64) -> TileLayout {
+        let k_min = t.scales.iter().copied().fold(f64::INFINITY, f64::min);
+        let density = s * k_min;
+        let sub = Packer { charts: t.charts, tiles: &[], max_chart_size: 0, block: 1, ..*self };
+        let r = pack(&sub, Some(density), 0).expect("an unbounded page always fits");
+        let pad = 2 * self.padding;
+        let inner = [r.width.saturating_sub(pad) as f64 / density, r.height.saturating_sub(pad) as f64 / density];
+        TileLayout { placements: r.placements, density, inner }
+    }
+
+    fn prepare(&self, s: f64) -> Prepared {
+        let tiles: Vec<TileLayout> = self.tiles.iter().map(|t| self.layout_tile(t, s)).collect();
         let pad = 2 * self.padding;
         let b = self.block;
-        self.charts
-            .iter()
-            .map(|c| {
-                let (w, h) = content_size(c.size, chart_density(c.size, s, self.max_chart_size));
-                (round_up(w.saturating_add(pad), b), round_up(h.saturating_add(pad), b))
-            })
-            .collect()
+        let padded = |(w, h): (u32, u32)| (round_up(w.saturating_add(pad), b), round_up(h.saturating_add(pad), b));
+        let mut sizes: Vec<(u32, u32)> =
+            self.charts.iter().map(|c| padded(content_size(c.size, chart_density(c.size, s, self.max_chart_size)))).collect();
+        let mut rotatable = vec![self.allow_rotation; sizes.len()];
+        let mut masks = if self.method == Packing::Shape { self.masks(s) } else { Vec::new() };
+        for (t, layout) in self.tiles.iter().zip(&tiles) {
+            for &k in t.scales {
+                let (w, h) = padded(content_size(layout.inner, k * s));
+                sizes.push((w, h));
+                rotatable.push(false);
+                if self.method == Packing::Shape {
+                    masks.push(ChartMasks { rot: vec![Mask::rect(w / b, h / b)] });
+                }
+            }
+        }
+        Prepared { sizes, rotatable, masks, tiles }
     }
 
     /// Chart masks in blocks.
@@ -205,29 +263,24 @@ impl Packer<'_> {
         }
     }
 
-    fn prepare(&self, s: f64) -> Prepared {
-        match self.method {
-            Packing::Rect => Prepared::Rects(self.rects(s).iter().map(|&(w, h)| (w / self.block, h / self.block)).collect()),
-            Packing::Shape => Prepared::Masks(self.masks(s)),
-        }
-    }
-
-    /// Packs at density `s` into pages of `width × height` texels, using at
-    /// most `max_pages`. `None` if it doesn't fit.
-    fn trial(&self, s: f64, width: u32, height: u32, max_pages: usize) -> Option<Trial> {
-        self.place(&self.prepare(s), width, height, max_pages)
+    /// Splits trial placements into charts and per-tile instances.
+    fn finish(&self, prep: Prepared, (mut placements, _): Trial, width: u32, height: u32, pages: u32, s: f64) -> PackResult {
+        let mut rest = placements.split_off(self.charts.len()).into_iter();
+        let instances = self.tiles.iter().map(|t| rest.by_ref().take(t.scales.len()).collect()).collect();
+        PackResult { placements, instances, tiles: prep.tiles, width, height, pages, texels_per_unit: s }
     }
 
     fn place(&self, prep: &Prepared, width: u32, height: u32, max_pages: usize) -> Option<Trial> {
         // Pack in block units, then scale back to texels.
         let b = self.block;
         let (bw, bh) = (width / b, if height == u32::MAX { u32::MAX } else { height / b });
-        let (mut placements, mut used) = match prep {
-            Prepared::Rects(r) => {
-                let (placements, pages) = try_pack(r, bw, bh, max_pages, self.allow_rotation)?;
+        let (mut placements, mut used) = match self.method {
+            Packing::Rect => {
+                let r: Vec<(u32, u32)> = prep.sizes.iter().map(|&(w, h)| (w / b, h / b)).collect();
+                let (placements, pages) = try_pack(&r, &prep.rotatable, bw, bh, max_pages)?;
                 (placements, pages.iter().map(|p| (p.width, p.used_height)).collect::<Vec<_>>())
             }
-            Prepared::Masks(m) => shape_pack(m, bw, bh, max_pages)?,
+            Packing::Shape => shape_pack(&prep.masks, bw, bh, max_pages)?,
         };
         if b > 1 {
             for p in &mut placements {
@@ -292,11 +345,12 @@ fn order(r: &[(u32, u32)]) -> Vec<usize> {
     o
 }
 
-fn try_pack(r: &[(u32, u32)], width: u32, height: u32, max_pages: usize, allow_rotation: bool) -> Option<(Vec<Placement>, Vec<Skyline>)> {
+fn try_pack(r: &[(u32, u32)], rotatable: &[bool], width: u32, height: u32, max_pages: usize) -> Option<(Vec<Placement>, Vec<Skyline>)> {
     let mut placements = vec![Placement::default(); r.len()];
     let mut pages: Vec<Skyline> = Vec::new();
     for i in order(r) {
         let (w, h) = r[i];
+        let allow_rotation = rotatable[i];
         let mut done = false;
         for (pi, page) in pages.iter_mut().enumerate() {
             if let Some((x, y, rotated)) = page.place(w, h, allow_rotation) {
@@ -319,27 +373,26 @@ fn try_pack(r: &[(u32, u32)], width: u32, height: u32, max_pages: usize, allow_r
 }
 
 pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32) -> Result<PackResult, Error> {
-    let area: f64 = p.charts.iter().map(|c| c.area).sum();
-    if p.charts.is_empty() || !(area > 0.0) {
+    let tile_area = |t: &TileSpec| t.charts.iter().map(|c| c.area).sum::<f64>() * t.scales.iter().map(|k| k * k).sum::<f64>();
+    let area: f64 = p.charts.iter().map(|c| c.area).sum::<f64>() + p.tiles.iter().map(tile_area).sum::<f64>();
+    if !(area > 0.0) {
+        // Nothing with surface area: everything collapses to the origin.
         let res = resolution.max(1);
-        return Ok(PackResult {
-            placements: vec![Placement::default(); p.charts.len()],
-            width: res,
-            height: res,
-            pages: if p.charts.is_empty() { 0 } else { 1 },
-            texels_per_unit: texels_per_unit.unwrap_or(1.0),
-        });
+        let s = texels_per_unit.unwrap_or(1.0);
+        let items = p.charts.len() + p.tiles.iter().map(|t| t.scales.len()).sum::<usize>();
+        let trial = (vec![Placement::default(); items], Vec::new());
+        return Ok(p.finish(p.prepare(s), trial, res, res, u32::from(items > 0), s));
     }
 
     match (texels_per_unit, resolution) {
         // Fixed density, unbounded single page: try a few near-square widths
         // and keep the smallest page (packing is cheap next to rasterizing).
         (Some(s), 0) => {
-            let r = p.rects(s);
+            let prep = p.prepare(s);
+            let r = &prep.sizes;
             let bbox: f64 = r.iter().map(|&(w, h)| w as f64 * h as f64).sum();
             let fill = if p.method == Packing::Shape { 0.8 } else { 1.15 };
             let max_side = r.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(1);
-            let prep = p.prepare(s);
             let one = |k: usize| {
                 let side = (bbox * fill).sqrt() * (0.85 + 0.05 * k as f64);
                 let width = round_up(max_side.max(side.ceil() as u32), p.block);
@@ -354,23 +407,31 @@ pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32
             #[cfg(not(feature = "parallel"))]
             let trials: Vec<_> = (0..7).map(one).collect();
             let (_, _, placements, used) = trials.into_iter().min_by_key(|t| (t.0, t.1)).expect("seven trials");
-            Ok(PackResult { placements, width: used.0.max(1), height: used.1.max(1), pages: 1, texels_per_unit: s })
+            Ok(p.finish(prep, (placements, Vec::new()), used.0.max(1), used.1.max(1), 1, s))
         }
         // Fixed density, fixed page size: as many pages as needed.
         (Some(s), res) => {
-            if let Some(&(w, h)) = p.rects(s).iter().find(|&&(w, h)| w.max(h) > res) {
+            let prep = p.prepare(s);
+            if let Some(&(w, h)) = prep.sizes.iter().find(|&&(w, h)| w.max(h) > res) {
                 return Err(Error::ChartTooLarge { width: w, height: h, resolution: res });
             }
-            let (placements, used) = p
-                .trial(s, res, res, usize::MAX)
+            let trial = p
+                .place(&prep, res, res, usize::MAX)
                 .ok_or(Error::ChartTooLarge { width: res + 1, height: res + 1, resolution: res })?;
-            Ok(PackResult { placements, width: res, height: res, pages: used.len() as u32, texels_per_unit: s })
+            let pages = trial.1.len() as u32;
+            Ok(p.finish(prep, trial, res, res, pages, s))
         }
         // Automatic density: the largest density that fits a single page.
         (None, res) => {
             let res = if res == 0 { 1024 } else { res };
-            let fits = |s: f64| p.trial(s, res, res, 1).map(|(pl, used)| (pl, s, used[0].1));
-            let bbox: f64 = p.charts.iter().map(|c| c.size[0] * c.size[1]).sum();
+            let fits = |s: f64| {
+                let prep = p.prepare(s);
+                let trial = p.place(&prep, res, res, 1)?;
+                let used = trial.1[0].1;
+                Some((prep, trial, s, used))
+            };
+            let tile_bbox = |t: &TileSpec| t.charts.iter().map(|c| c.size[0] * c.size[1]).sum::<f64>() * t.scales.iter().map(|k| k * k).sum::<f64>();
+            let bbox: f64 = p.charts.iter().map(|c| c.size[0] * c.size[1]).sum::<f64>() + p.tiles.iter().map(tile_bbox).sum::<f64>();
             let full = res as f64 * res as f64;
             let mut best = None;
             let (mut lo, mut hi);
@@ -414,9 +475,7 @@ pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32
             }
             match best {
                 // Crop the page to the rows actually used.
-                Some((placements, s, used)) => {
-                    Ok(PackResult { placements, width: res, height: used.max(1), pages: 1, texels_per_unit: s })
-                }
+                Some((prep, trial, s, used)) => Ok(p.finish(prep, trial, res, used.max(1), 1, s)),
                 // Too many charts for one page even at minimal density.
                 None => {
                     let s = 0.5 * (full / bbox).sqrt();
@@ -434,7 +493,7 @@ mod tests {
     #[test]
     fn skyline_packs_without_overlap() {
         let r: Vec<(u32, u32)> = (0..200).map(|i| (3 + (i * 7) % 23, 2 + (i * 13) % 17)).collect();
-        let (pl, _) = try_pack(&r, 128, 128, usize::MAX, true).unwrap();
+        let (pl, _) = try_pack(&r, &vec![true; r.len()], 128, 128, usize::MAX).unwrap();
         let boxes: Vec<_> = pl
             .iter()
             .zip(&r)

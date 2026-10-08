@@ -383,7 +383,7 @@ fn output_is_deterministic() {
     // Bit-identical output across runs (fresh hash seeds each time) and thread
     // counts, on meshes that exercise segmentation, splitting and packing.
     let (a, b, c) = (torus(48, 24), sphere(32, 16), cube());
-    let inputs = [a.input(), b.input(), c.input()];
+    let inputs = [a.input(), b.input(), MeshInput { instances: &[1.0, 1.5], ..c.input() }];
     let fixed = Options { texels_per_unit: Some(40.0), resolution: 0, ..Options::default() };
     for opts in [Options::default(), fixed] {
         let reference = generate(&inputs, &opts).unwrap();
@@ -479,4 +479,59 @@ fn inconsistently_wound_input_still_gets_ccw_uvs() {
         }
     }
     run(&[&m], &Options::default());
+}
+
+/// An instanced output mesh mapped into one instance's atlas rectangle.
+fn instance_mesh(out: &uvunwrap::OutputMesh, i: usize) -> uvunwrap::OutputMesh {
+    let r = out.instances[i];
+    let mut m = out.clone();
+    for v in &mut m.vertices {
+        v.uv = [0, 1].map(|k| r.min[k] + v.uv[k] * (r.max[k] - r.min[k]));
+        v.page = r.page;
+    }
+    m.instances.clear();
+    m
+}
+
+#[test]
+fn instances_get_their_own_rectangles() {
+    let (t, c) = (torus(32, 16), cube());
+    let scales = [1.0, 2.0, 0.5];
+    let one = [1.0];
+    for opts in [
+        Options::default(),
+        Options { texels_per_unit: Some(12.0), resolution: 192, ..Options::default() },
+        Options { packing: uvunwrap::Packing::Rect, block_align: true, ..Options::default() },
+    ] {
+        let inputs = [MeshInput { instances: &scales, ..t.input() }, c.input(), MeshInput { instances: &one, ..c.input() }];
+        let atlas = generate(&inputs, &opts).unwrap();
+        let (torus_out, cube_out, single) = (&atlas.meshes[0], &atlas.meshes[1], &atlas.meshes[2]);
+        assert_eq!((torus_out.instances.len(), cube_out.instances.len(), single.instances.len()), (3, 0, 1));
+        // Local UVs fill [0, 1] (up to padding) on both axes.
+        for out in [torus_out, single] {
+            for k in 0..2 {
+                let lo = out.vertices.iter().map(|v| v.uv[k]).fold(f32::MAX, f32::min);
+                let hi = out.vertices.iter().map(|v| v.uv[k]).fold(f32::MIN, f32::max);
+                assert!((0.0..0.05).contains(&lo) && hi <= 1.0 && hi > 0.95, "local uv range {lo}..{hi}");
+            }
+        }
+        // Rectangles scale with the instance scale.
+        let size = |r: uvunwrap::InstanceRect| ((r.max[0] - r.min[0]) * atlas.width as f32, (r.max[1] - r.min[1]) * atlas.height as f32);
+        let base = size(torus_out.instances[0]);
+        for (i, &k) in scales.iter().enumerate() {
+            let (w, h) = size(torus_out.instances[i]);
+            assert!((w / base.0 - k).abs() < 1e-3 && (h / base.1 - k).abs() < 1e-3, "instance {i}: {w}x{h} vs {base:?}");
+        }
+        // Every instance and the plain cube together: valid, non-overlapping.
+        let mut expanded = atlas.clone();
+        expanded.meshes = (0..3).map(|i| instance_mesh(torus_out, i)).collect();
+        expanded.meshes.push(cube_out.clone());
+        expanded.meshes.push(instance_mesh(single, 0));
+        check(&expanded, &[&t, &t, &t, &c, &c]);
+        if opts.resolution == 192 {
+            assert!(atlas.page_count > 1, "expected several pages");
+        }
+    }
+    let bad = MeshInput { instances: &[1.0, 0.0], ..c.input() };
+    assert!(matches!(generate(&[bad], &Options::default()), Err(Error::InvalidScale { mesh: 0 })));
 }

@@ -3,7 +3,8 @@
 //!
 //! ```text
 //! cargo run --release --example unwrap -- [--rect] [--flat] [--block-align]
-//!     [--texels-per-unit X] [--max-chart-size N] [--padding N] [--resolution N] [input.obj] [output_prefix]
+//!     [--texels-per-unit X] [--max-chart-size N] [--padding N] [--resolution N]
+//!     [--instances 1,2,0.5] [input.obj] [output_prefix]
 //! ```
 //!
 //! Vertices are split per distinct `v/vt/vn` corner, as an engine import
@@ -106,6 +107,7 @@ fn main() {
     if let Some(v) = value("--max-chart-size") {
         opts.max_chart_size = v.parse().expect("--max-chart-size");
     }
+    let instances: Vec<f32> = value("--instances").map(|v| v.split(',').map(|k| k.parse().expect("--instances")).collect()).unwrap_or_default();
     if let Some(v) = value("--resolution") {
         opts.resolution = v.parse().expect("--resolution");
     }
@@ -128,7 +130,7 @@ fn main() {
     let (positions, indices) = if flat { flatten(&positions, &indices) } else { (positions, indices) };
 
     let start = Instant::now();
-    let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices, ..Default::default() };
+    let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices, instances: &instances, ..Default::default() };
     let atlas = uvunwrap::generate(&[mesh], &opts).expect("unwrap failed");
     let elapsed = start.elapsed();
     let out = &atlas.meshes[0];
@@ -180,13 +182,31 @@ fn main() {
             "<svg xmlns='http://www.w3.org/2000/svg' width='{w}' height='{h}' viewBox='0 0 {w} {h}'>\
              <rect width='100%' height='100%' fill='#1b1b1f'/>"
         );
-        for t in out.indices.chunks_exact(3) {
-            let vs = [0, 1, 2].map(|k| out.vertices[t[k] as usize]);
-            let (Some(chart), true) = (vs[0].chart, vs[0].page == page) else { continue };
-            let hue = (chart as f32 * 137.508) % 360.0; // golden-angle palette
-            let pts: Vec<String> =
-                vs.iter().map(|v| format!("{:.2},{:.2}", v.uv[0] * atlas.width as f32 * scale, v.uv[1] * atlas.height as f32 * scale)).collect();
-            write!(svg, "<polygon points='{}' fill='hsl({hue:.0},65%,60%)' stroke='hsl({hue:.0},65%,35%)' stroke-width='0.3'/>", pts.join(" ")).unwrap();
+        // Draw the mesh once, or once per instance rectangle.
+        let views: Vec<Option<uvunwrap::InstanceRect>> =
+            if out.instances.is_empty() { vec![None] } else { out.instances.iter().copied().map(Some).collect() };
+        for view in views {
+            for t in out.indices.chunks_exact(3) {
+                let vs = [0, 1, 2].map(|k| out.vertices[t[k] as usize]);
+                let Some(chart) = vs[0].chart else { continue };
+                let on_page = view.map_or(vs[0].page, |r| r.page);
+                if on_page != page {
+                    continue;
+                }
+                let uv = |uv: [f32; 2]| match view {
+                    None => uv,
+                    Some(r) => [0, 1].map(|k| r.min[k] + uv[k] * (r.max[k] - r.min[k])),
+                };
+                let hue = (chart as f32 * 137.508) % 360.0; // golden-angle palette
+                let pts: Vec<String> = vs
+                    .iter()
+                    .map(|v| {
+                        let p = uv(v.uv);
+                        format!("{:.2},{:.2}", p[0] * atlas.width as f32 * scale, p[1] * atlas.height as f32 * scale)
+                    })
+                    .collect();
+                write!(svg, "<polygon points='{}' fill='hsl({hue:.0},65%,60%)' stroke='hsl({hue:.0},65%,35%)' stroke-width='0.3'/>", pts.join(" ")).unwrap();
+            }
         }
         svg.push_str("</svg>");
         fs::write(format!("{prefix}_page{page}.svg"), svg).unwrap();

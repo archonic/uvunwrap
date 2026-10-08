@@ -35,9 +35,11 @@ Crate goals (✅ done, ◐ partial, ☐ missing):
    `face_materials` and `face_ignore`.
 4. ✅ **Fixed or automatic density**, one growing page or fixed-size pages,
    page size reported; per-mesh `scale` for scaled instances.
-5. ◐ **Multi-mesh atlases.** `generate` packs many meshes into shared pages.
-   Missing: an option to keep each mesh on one page (a Bevy mesh takes one
-   lightmap image) and per-mesh bounds within the page (for `uv_rect`).
+5. ✅ **Multi-mesh atlases and instances.** `generate` packs many meshes
+   into shared pages. `MeshInput::instances` unwraps a mesh once into its own
+   layout (UVs in [0,1]) and gives each instance an unrotated rectangle on one
+   page (`OutputMesh::instances`), which is Bevy's `Lightmap::uv_rect`; one
+   instance keeps a mesh on one page.
 6. ◐ **Determinism.** Same input gives bit-identical output for any thread
    count (tested). No platform math (`geom::cos`/`geom::angle` replace libm
    trig; never call `sin`/`cos`/`atan2`/`acos`/`powf`/`exp` etc. in `src/`),
@@ -112,7 +114,10 @@ use case.
   multiple fixed pages; the growing page tries 7 widths in parallel on one
   set of masks and keeps the smallest area). Per-chart density (`chart_density`) applies
   `max_chart_size`; `block_align` packs in 4×4 block units (`Mask::downsample`,
-  rects rounded up) and scales placements back to texels.
+  rects rounded up) and scales placements back to texels. Instanced meshes
+  are `TileSpec`s: each trial lays out the tile's charts (a sub-`pack` at the
+  smallest instance's density) and adds one unrotatable rectangle per
+  instance (`Mask::rect`) to the items being packed.
 - `tests/meshes.rs`: plane, cube, sphere, torus, cylinder, soup, degenerates,
   errors; checks topology preservation, UV range, no flips, no overlaps.
 - `examples/unwrap.rs`: OBJ in (one vertex per `v/vt/vn` corner, like an
@@ -164,6 +169,10 @@ machine is often loaded, so multi-core timings are noisy.
 - Curvature predictors: signed total K works for skipping (|K| > 3, ≥ 1000
   faces); absolute K is useless on scans (noise).
 - faer parallel factorization (`Par::rayon`) for big systems: no gain.
+- Instances share one layout padded for the smallest instance, so a mesh
+  whose instance scales differ by 4× gives the largest instance 4× the
+  padding (visible on spot with scales 2, 1, 0.5). Inherent to sharing UVs;
+  callers with very different scales can split them into separate meshes.
 - Low utilization on small atlases is padding, not the packer: padding 2
   around 58 charts on a ~150 px page costs ~20 points (xatlas pads the same
   way: 8-neighbour dilation on both charts, plus a bilinear border by
@@ -178,12 +187,11 @@ machine is often loaded, so multi-core timings are noisy.
 
 ## Next steps (priority order)
 
-1. Multi-mesh: one page per mesh option, per-mesh bounds.
-2. Progress/cancellation; repacking existing UVs.
-3. CI (tests in both feature configs, wasm32 build, example output hashes
+1. Progress/cancellation; repacking existing UVs.
+2. CI (tests in both feature configs, wasm32 build, example output hashes
    compared across x86-64/ARM/wasm32 without `direct-solver`), then publish
    0.1 to crates.io; refresh `docs/atlases.png` (still shows the old
    rect-packed atlases).
-4. Deterministic direct solver (own sparse Cholesky), if cross-platform
+3. Deterministic direct solver (own sparse Cholesky), if cross-platform
    determinism must hold with the fast path.
-5. Bevy integration crate.
+4. Bevy integration crate.

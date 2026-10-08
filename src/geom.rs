@@ -50,9 +50,9 @@ pub(crate) fn normalize3(a: V3) -> Option<V3> {
     (l > 0.0 && l.is_finite()).then(|| scale3(a, 1.0 / l))
 }
 
-/// Twice the signed area of a 2D triangle (positive = counter-clockwise).
+/// Signed area of a 2D triangle (positive = counter-clockwise in a y-up frame).
 #[inline]
-pub(crate) fn signed_area2(a: V2, b: V2, c: V2) -> f64 {
+pub(crate) fn signed_area(a: V2, b: V2, c: V2) -> f64 {
     0.5 * ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
 }
 
@@ -155,20 +155,27 @@ pub(crate) fn min_area_rect_dir(hull: &[V2]) -> (f64, f64) {
             continue;
         }
         let (c, s) = (dx / len, dy / len);
-        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-        for &h in hull {
-            let r = rotate(h, c, s);
-            for k in 0..2 {
-                lo[k] = lo[k].min(r[k]);
-                hi[k] = hi[k].max(r[k]);
-            }
-        }
+        let [lo, hi] = bounds2(hull.iter().map(|&h| rotate(h, c, s)));
         let area = (hi[0] - lo[0]) * (hi[1] - lo[1]);
         if area < best.0 {
             best = (area, (c, s));
         }
     }
     best.1
+}
+
+/// Axis-aligned bounds `[min, max]` of 2D points (infinite and inverted if
+/// there are none).
+pub(crate) fn bounds2(points: impl IntoIterator<Item = V2>) -> [V2; 2] {
+    points.into_iter().fold(
+        [[f64::INFINITY; 2], [f64::NEG_INFINITY; 2]],
+        |[lo, hi], p| {
+            [
+                [lo[0].min(p[0]), lo[1].min(p[1])],
+                [hi[0].max(p[0]), hi[1].max(p[1])],
+            ]
+        },
+    )
 }
 
 /// Rotates `p` by `-θ` given `c = cos θ`, `s = sin θ`.

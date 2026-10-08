@@ -54,6 +54,7 @@
 mod geom;
 mod mask;
 mod pack;
+mod par;
 mod param;
 mod progress;
 mod segment;
@@ -636,17 +637,20 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
         .into_iter()
         .zip(meshes)
         .map(|((topo, groups), m)| {
-            let charts = match m.existing_uvs {
-                None => param::parameterize_all(&topo, groups, max_distortion, ctx, faces),
-                Some(uvs) => {
-                    let face_uvs: Vec<[[f64; 2]; 3]> = m
-                        .indices
-                        .chunks_exact(3)
-                        .map(|t| [0, 1, 2].map(|c| uvs[t[c] as usize].map(f64::from)))
-                        .collect();
-                    param::from_islands(&topo, groups, &face_uvs, max_distortion, ctx, faces)
-                }
-            };
+            let face_uvs: Option<Vec<[[f64; 2]; 3]>> = m.existing_uvs.map(|uvs| {
+                m.indices
+                    .chunks_exact(3)
+                    .map(|t| [0, 1, 2].map(|c| uvs[t[c] as usize].map(f64::from)))
+                    .collect()
+            });
+            let charts = param::parameterize(
+                &topo,
+                groups,
+                face_uvs.as_deref(),
+                max_distortion,
+                ctx,
+                faces,
+            );
             (topo, charts)
         })
         .collect();

@@ -4,6 +4,7 @@
 
 use crate::geom::V2;
 use crate::mask::{chart_masks, content_size, ChartMasks, Mask, Page};
+use crate::par;
 use crate::progress::{Ctx, Stage, QUIET};
 use crate::{Error, Packing};
 
@@ -170,9 +171,7 @@ impl Skyline {
 
 /// `x` rounded up to a multiple of `b`.
 fn round_up(x: u32, b: u32) -> u32 {
-    x.div_euclid(b)
-        .saturating_add(u32::from(x % b != 0))
-        .saturating_mul(b)
+    x.div_ceil(b).saturating_mul(b)
 }
 
 /// Texel density for one chart: `s`, reduced so the chart's larger content
@@ -358,15 +357,14 @@ impl Packer<'_> {
 
     /// Chart masks in blocks.
     fn masks(&self, s: f64) -> Vec<ChartMasks> {
-        let rotations = if self.allow_rotation { 4 } else { 1 };
-        let one = |c: &ChartGeom| {
+        par::map_ref(self.charts, |c| {
             let m = chart_masks(
                 c.uvs,
                 c.tris,
                 c.size,
                 chart_density(c.size, s, self.max_chart_size),
                 self.padding,
-                rotations,
+                self.allow_rotation,
             );
             if self.block > 1 {
                 ChartMasks {
@@ -375,16 +373,7 @@ impl Packer<'_> {
             } else {
                 m
             }
-        };
-        #[cfg(feature = "parallel")]
-        {
-            use rayon::prelude::*;
-            self.charts.par_iter().map(one).collect()
-        }
-        #[cfg(not(feature = "parallel"))]
-        {
-            self.charts.iter().map(one).collect()
-        }
+        })
     }
 
     /// Splits trial placements into charts and per-tile instances.
@@ -721,13 +710,7 @@ fn pack_unbounded(p: &Packer<'_>, s: f64, cap: u32) -> Result<PackResult, Error>
         ((over, size, k), placements, used[0])
     };
     let widths = if cap == u32::MAX { 7 } else { 8 };
-    #[cfg(feature = "parallel")]
-    let trials: Vec<_> = {
-        use rayon::prelude::*;
-        (0..widths).into_par_iter().map(one).collect()
-    };
-    #[cfg(not(feature = "parallel"))]
-    let trials: Vec<_> = (0..widths).map(one).collect();
+    let trials = par::map((0..widths).collect(), one);
     let (_, placements, used) = trials
         .into_iter()
         .min_by_key(|t| t.0)

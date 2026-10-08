@@ -102,7 +102,7 @@ impl Mask {
     /// The mask in units of `b × b` texel blocks: a block is covered if any
     /// of its texels is.
     pub(crate) fn downsample(&self, b: u32) -> Mask {
-        let up = |x: u32| x / b + u32::from(x % b != 0);
+        let up = |x: u32| x.div_ceil(b);
         let mut bits = Bits::new(up(self.w), up(self.h));
         for r in 0..self.h {
             for &[a, e] in self.row(r) {
@@ -254,20 +254,22 @@ fn next_in_row(row: &[u64], x: u32, value: bool) -> u32 {
     }
 }
 
-/// All four rotations of a chart's padded mask, indexed by quarter turns.
+/// Rotations of a chart's padded mask, indexed by quarter turns: just the
+/// unrotated mask, or all four.
 pub(crate) struct ChartMasks {
     pub rot: Vec<Mask>,
 }
 
 /// Rasterizes a chart (UVs in world units, scaled by `s`) conservatively into
-/// its padded mask and derives the requested rotations from it.
+/// its padded mask, and derives the other three rotations from it if
+/// `all_rotations`.
 pub(crate) fn chart_masks(
     uvs: &[V2],
     tris: &[[u32; 3]],
     size: V2,
     s: f64,
     padding: u32,
-    rotations: u8,
+    all_rotations: bool,
 ) -> ChartMasks {
     let (cw, ch) = content_size(size, s);
     let (w, h) = (
@@ -302,17 +304,12 @@ pub(crate) fn chart_masks(
     }
     let bits = dilate(&bits, padding);
     let m0 = Mask::from_bits(&bits);
-    let rot = match rotations {
-        1 => vec![m0],
-        2 => {
-            let m1 = m0.rotate90();
-            vec![m0, m1]
-        }
-        _ => {
-            let m1 = m0.rotate90();
-            let (m2, m3) = (m0.rotate180(), m1.rotate180());
-            vec![m0, m1, m2, m3]
-        }
+    let rot = if all_rotations {
+        let m1 = m0.rotate90();
+        let (m2, m3) = (m0.rotate180(), m1.rotate180());
+        vec![m0, m1, m2, m3]
+    } else {
+        vec![m0]
     };
     ChartMasks { rot }
 }
@@ -518,11 +515,10 @@ impl Page {
         if self.free_run.len() < need {
             self.data.resize(need * self.words, 0);
             // Bits past the page width count as occupied.
-            for row in self.free_run.len()..need {
-                let last = (row + 1) * self.words - 1;
-                let used = self.w as usize - (self.words - 1) * 64;
-                if used < 64 {
-                    self.data[last] = !0u64 << used;
+            let used = self.w as usize - (self.words - 1) * 64;
+            if used < 64 {
+                for row in self.free_run.len()..need {
+                    self.data[(row + 1) * self.words - 1] = !0u64 << used;
                 }
             }
             self.free_run.resize(need, self.w);
@@ -576,7 +572,7 @@ mod tests {
         ];
         let tris = [[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 5]];
         let s = 3.7;
-        let derived = chart_masks(&uvs, &tris, [3.0, 2.0], s, 1, 4);
+        let derived = chart_masks(&uvs, &tris, [3.0, 2.0], s, 1, true);
         let (cw, ch) = content_size([3.0, 2.0], s);
         for k in 0..4u8 {
             let moved: Vec<V2> = uvs
@@ -588,7 +584,7 @@ mod tests {
             } else {
                 [ch as f64, cw as f64]
             };
-            let direct = &chart_masks(&moved, &tris, size, 1.0, 1, 1).rot[0];
+            let direct = &chart_masks(&moved, &tris, size, 1.0, 1, false).rot[0];
             let d = &derived.rot[k as usize];
             assert_eq!((d.w, d.h), (direct.w, direct.h), "rotation {k}");
             for r in 0..d.h {
@@ -626,14 +622,14 @@ mod tests {
             [3, 0, 4],
             [3, 4, 7],
         ];
-        let frame = chart_masks(&uvs, &tris, [10.0, 10.0], 1.0, 0, 1);
+        let frame = chart_masks(&uvs, &tris, [10.0, 10.0], 1.0, 0, false);
         let small = chart_masks(
             &[[0.0, 0.0], [1.5, 0.0], [0.0, 1.5]],
             &[[0, 1, 2]],
             [1.5, 1.5],
             1.0,
             0,
-            1,
+            false,
         );
         let mut page = Page::new(10, 10);
         let (x, y) = page.find(&frame.rot[0], u64::MAX).unwrap();

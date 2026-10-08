@@ -13,7 +13,9 @@
 //! - **creases**: a penalty for growing across sharp edges, so seams follow
 //!   creases instead of cutting through smooth areas.
 //!
-//! Finally, small charts mostly enclosed by a neighbor are merged into it.
+//! Finally, small charts mostly enclosed by a neighbor are merged into it,
+//! and single-face teeth are moved off chart boundaries. For meshes with input
+//! UVs, [`components`] gives the UV islands instead (no segmentation).
 
 use crate::geom::{add3, dot3, len3, normalize3, scale3, sub3, V3};
 use crate::topology::{Topology, NONE};
@@ -124,22 +126,21 @@ fn smoothed_normals(topo: &Topology, rounds: usize) -> Vec<V3> {
         .collect()
 }
 
-/// Builds the planar regions of `subset` (faces outside it count as
-/// boundary), using `smooth` normals for the region normals.
-fn build_regions(topo: &Topology, smooth: &[V3], subset: &[u32]) -> Regions {
+/// Builds the planar regions of the non-excluded faces (excluded ones count
+/// as boundary), using `smooth` normals for the region normals.
+fn build_regions(topo: &Topology, smooth: &[V3]) -> Regions {
     // Faces whose normals differ by less than ~0.25° count as coplanar.
     const COPLANAR: f64 = 1.0 - 1e-5;
-    let nf = topo.faces.len();
-    // NONE: outside the subset; PENDING: in it but not assigned yet.
+    // NONE: excluded; PENDING: not assigned to a region yet.
     const PENDING: u32 = NONE - 1;
-    let mut of_face = vec![NONE; nf];
-    for &f in subset {
-        of_face[f as usize] = PENDING;
-    }
+    let mut of_face: Vec<u32> = topo
+        .excluded
+        .iter()
+        .map(|&x| if x { NONE } else { PENDING })
+        .collect();
     let mut faces: Vec<Vec<u32>> = Vec::new();
     let mut stack = Vec::new();
-    for &seed in subset {
-        let seed = seed as usize;
+    for seed in 0..of_face.len() {
         if of_face[seed] != PENDING {
             continue;
         }
@@ -290,18 +291,10 @@ pub(crate) fn components(topo: &Topology) -> Vec<Vec<u32>> {
 /// face normals lie within `max_angle` radians of the chart's average normal.
 pub(crate) fn segment(topo: &Topology, max_angle: f64) -> Vec<Vec<u32>> {
     let smooth = smoothed_normals(topo, SMOOTHING_ROUNDS);
-    let all: Vec<u32> = (0..topo.faces.len() as u32)
-        .filter(|&f| !topo.excluded[f as usize])
-        .collect();
-    segment_regions(topo, &build_regions(topo, &smooth, &all), &all, max_angle)
+    segment_regions(topo, &build_regions(topo, &smooth), max_angle)
 }
 
-fn segment_regions(
-    topo: &Topology,
-    reg: &Regions,
-    subset: &[u32],
-    max_angle: f64,
-) -> Vec<Vec<u32>> {
+fn segment_regions(topo: &Topology, reg: &Regions, max_angle: f64) -> Vec<Vec<u32>> {
     let cos_max = crate::geom::cos(max_angle);
     let nr = reg.faces.len();
     let mut chart_of = vec![NONE; nr];
@@ -390,13 +383,13 @@ fn segment_regions(
             }
         })
         .collect();
-    smooth_boundaries(topo, reg, subset, &mut face_chart, &states, cos_max);
+    smooth_boundaries(topo, reg, &mut face_chart, &states, cos_max);
 
+    // Excluded faces have no region, hence no chart.
     let mut out: Vec<Vec<u32>> = vec![Vec::new(); charts.len()];
-    for &f in subset {
-        let c = face_chart[f as usize];
+    for (f, &c) in face_chart.iter().enumerate() {
         if c != NONE {
-            out[c as usize].push(f);
+            out[c as usize].push(f as u32);
         }
     }
     out.retain(|c| !c.is_empty());
@@ -409,7 +402,6 @@ fn segment_regions(
 fn smooth_boundaries(
     topo: &Topology,
     reg: &Regions,
-    subset: &[u32],
     face_chart: &mut [u32],
     states: &[ChartState],
     cos_max: f64,
@@ -417,8 +409,7 @@ fn smooth_boundaries(
     let normals: Vec<V3> = states.iter().map(|s| s.normal()).collect();
     for _ in 0..4 {
         let mut moved = false;
-        for &f in subset {
-            let f = f as usize;
+        for f in 0..face_chart.len() {
             let own = face_chart[f];
             let r = reg.of_face[f];
             if own == NONE || reg.faces[r as usize].len() != 1 {

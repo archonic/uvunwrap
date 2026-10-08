@@ -9,6 +9,7 @@
 //! always terminates with a valid parameterization.
 
 use crate::geom::*;
+use crate::par;
 use crate::progress::{Ctx, Stage};
 use crate::solver::{least_squares, SparseRows};
 use crate::topology::{Topology, NONE};
@@ -31,11 +32,14 @@ pub(crate) struct Chart {
     pub area: f64,
 }
 
-/// Parameterizes every group, reporting finished faces to `ctx` out of
-/// `total` (faces of all meshes). Returns nothing useful once cancelled.
-pub(crate) fn parameterize_all(
+/// Parameterizes every group in parallel, reporting finished faces to `ctx`
+/// out of `total` (faces of all meshes). With `face_uvs` (the input UVs of
+/// each face's corners), groups are the mesh's UV islands and are kept as
+/// they are when valid. Returns nothing useful once cancelled.
+pub(crate) fn parameterize(
     topo: &Topology,
     groups: Vec<Vec<u32>>,
+    face_uvs: Option<&[[V2; 3]]>,
     max_distortion: f64,
     ctx: &Ctx,
     total: usize,
@@ -46,58 +50,15 @@ pub(crate) fn parameterize_all(
         ctx,
         total,
     };
-    #[cfg(feature = "parallel")]
-    {
-        use rayon::prelude::*;
-        groups
-            .into_par_iter()
-            .flat_map_iter(|g| parameterize_group(&job, g))
-            .collect()
-    }
-    #[cfg(not(feature = "parallel"))]
-    {
-        groups
-            .into_iter()
-            .flat_map(|g| parameterize_group(&job, g))
-            .collect()
-    }
+    par::flat_map(groups, |g| match face_uvs {
+        Some(uvs) => island(&job, g, uvs),
+        None => parameterize_group(&job, g),
+    })
 }
 
-/// Charts from the mesh's own UV islands, where `face_uvs[f]` holds the input
-/// UVs of face `f`'s corners. Each island is kept as one chart (mirrored
-/// islands flipped back) unless it is unusable as is (flipped or degenerate
-/// triangles, self-overlap), in which case it is parameterized like any group.
-pub(crate) fn from_islands(
-    topo: &Topology,
-    islands: Vec<Vec<u32>>,
-    face_uvs: &[[V2; 3]],
-    max_distortion: f64,
-    ctx: &Ctx,
-    total: usize,
-) -> Vec<Chart> {
-    let job = Job {
-        topo,
-        max_distortion,
-        ctx,
-        total,
-    };
-    #[cfg(feature = "parallel")]
-    {
-        use rayon::prelude::*;
-        islands
-            .into_par_iter()
-            .flat_map_iter(|g| island(&job, g, face_uvs))
-            .collect()
-    }
-    #[cfg(not(feature = "parallel"))]
-    {
-        islands
-            .into_iter()
-            .flat_map(|g| island(&job, g, face_uvs))
-            .collect()
-    }
-}
-
+/// Keeps a UV island as one chart (mirrored islands flipped back), unless it
+/// is unusable as is (flipped or degenerate triangles, self-overlap), in
+/// which case it is parameterized like any group.
 fn island(job: &Job, faces: Vec<u32>, face_uvs: &[[V2; 3]]) -> Vec<Chart> {
     if job.ctx.is_cancelled() {
         return Vec::new();
@@ -122,17 +83,13 @@ fn island(job: &Job, faces: Vec<u32>, face_uvs: &[[V2; 3]]) -> Vec<Chart> {
             })
         })
         .collect();
-    let twice_area: f64 = local
-        .iter()
-        .map(|t| signed_area2(uvs[t[0] as usize], uvs[t[1] as usize], uvs[t[2] as usize]))
-        .sum();
-    if twice_area < 0.0 {
+    if total_area(&local, &uvs) < 0.0 {
         // Mirrored island: flip it so its triangles wind counter-clockwise.
         uvs.iter_mut().for_each(|p| p[0] = -p[0]);
     }
     // Authored UVs are kept however distorted; only validity is required.
     if validate(job.topo, &faces, &local, &uvs, f64::INFINITY).is_ok() {
-        return job.done(job.topo, faces, verts, local, uvs);
+        return job.done(faces, verts, local, uvs);
     }
     parameterize_group(job, faces)
 }
@@ -145,9 +102,9 @@ struct Job<'a> {
 }
 
 impl Job<'_> {
+    /// Reports the chart's faces as done and finalizes it.
     fn done(
         &self,
-        topo: &Topology,
         faces: Vec<u32>,
         verts: Vec<u32>,
         local: Vec<[u32; 3]>,
@@ -157,8 +114,24 @@ impl Job<'_> {
         let _ = self
             .ctx
             .advance(Stage::Parameterizing, faces.len(), Some(self.total));
-        vec![finalize(topo, faces, verts, local, uvs)]
+        vec![finalize(self.topo, faces, verts, local, uvs)]
     }
+}
+
+/// Why a parameterization was rejected.
+enum Rejection {
+    /// These two chart faces overlap: a good place to split.
+    Overlap(u32, u32),
+    /// Flipped or degenerate triangles, or too much distortion.
+    Invalid,
+}
+
+/// Total signed UV area of a chart's triangles.
+fn total_area(local: &[[u32; 3]], uvs: &[V2]) -> f64 {
+    local
+        .iter()
+        .map(|t| signed_area(uvs[t[0] as usize], uvs[t[1] as usize], uvs[t[2] as usize]))
+        .sum()
 }
 
 /// Charts at least this large are checked for curvature before solving.
@@ -176,7 +149,7 @@ fn parameterize_group(job: &Job, faces: Vec<u32>) -> Vec<Chart> {
     let (verts, local) = build_local(topo, &faces);
     let planar = planar_projection(topo, &faces, &verts);
     if faces.len() == 1 || validate(topo, &faces, &local, &planar, 1.02).is_ok() {
-        return job.done(topo, faces, verts, local, planar);
+        return job.done(faces, verts, local, planar);
     }
     let hopeless = faces.len() >= CURVATURE_CHECK_FACES
         && total_curvature(topo, &verts, &local).abs() > MAX_CURVATURE;
@@ -187,21 +160,19 @@ fn parameterize_group(job: &Job, faces: Vec<u32>) -> Vec<Chart> {
             return Vec::new(); // the solve can't be interrupted, but validation can be skipped
         }
         match validate(topo, &faces, &local, &conformal, max_distortion) {
-            Ok(()) => return job.done(topo, faces, verts, local, conformal),
-            Err(pair) => overlap = pair,
+            Ok(()) => return job.done(faces, verts, local, conformal),
+            Err(Rejection::Overlap(a, b)) => overlap = Some((a, b)),
+            Err(Rejection::Invalid) => {}
         }
         if validate(topo, &faces, &local, &planar, max_distortion).is_ok() {
-            return job.done(topo, faces, verts, local, planar);
+            return job.done(faces, verts, local, planar);
         }
     }
     // Overlaps usually come from a local fold in the surface, which no
     // flattening of this chart can fix: split between the two overlapping
     // triangles so a single split separates them.
     let (a, b) = split(topo, &faces, overlap);
-    #[cfg(feature = "parallel")]
-    let (mut a, b) = rayon::join(|| parameterize_group(job, a), || parameterize_group(job, b));
-    #[cfg(not(feature = "parallel"))]
-    let (mut a, b) = (parameterize_group(job, a), parameterize_group(job, b));
+    let (mut a, b) = par::join(|| parameterize_group(job, a), || parameterize_group(job, b));
     a.extend(b);
     a
 }
@@ -292,13 +263,7 @@ fn lscm(topo: &Topology, verts: &[u32], local: &[[u32; 3]], init: &[V2]) -> Vec<
         return init.to_vec();
     }
     // Pin the two extreme vertices along the longest extent of the projection.
-    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-    for p in init {
-        for k in 0..2 {
-            lo[k] = lo[k].min(p[k]);
-            hi[k] = hi[k].max(p[k]);
-        }
-    }
+    let [lo, hi] = bounds2(init.iter().copied());
     let axis = if hi[0] - lo[0] >= hi[1] - lo[1] { 0 } else { 1 };
     let pin_a = (0..n)
         .min_by(|&a, &b| init[a][axis].total_cmp(&init[b][axis]))
@@ -397,47 +362,43 @@ fn lscm(topo: &Topology, verts: &[u32], local: &[[u32; 3]], init: &[V2]) -> Vec<
 
 /// Accepts a parameterization only if no triangle is flipped or degenerate, the
 /// per-triangle area ratio (after normalizing total area) stays within
-/// `[1/max_distortion, max_distortion]`, and no two triangles overlap. On
-/// failure due to an overlap, returns one overlapping pair (chart face indices).
+/// `[1/max_distortion, max_distortion]`, and no two triangles overlap.
 fn validate(
     topo: &Topology,
     faces: &[u32],
     local: &[[u32; 3]],
     uv: &[V2],
     max_distortion: f64,
-) -> Result<(), Option<(u32, u32)>> {
+) -> Result<(), Rejection> {
     if uv.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {
-        return Err(None);
+        return Err(Rejection::Invalid);
     }
     let areas: Vec<f64> = local
         .iter()
-        .map(|t| signed_area2(uv[t[0] as usize], uv[t[1] as usize], uv[t[2] as usize]))
+        .map(|t| signed_area(uv[t[0] as usize], uv[t[1] as usize], uv[t[2] as usize]))
         .collect();
     let total_uv: f64 = areas.iter().sum();
     let total_3d: f64 = faces.iter().map(|&f| topo.areas[f as usize]).sum();
     if !(total_uv > 0.0) || !(total_3d > 0.0) {
-        return Err(None);
+        return Err(Rejection::Invalid);
     }
     let min_area = total_uv * 1e-12;
     let scale = total_3d / total_uv;
     for (k, &f) in faces.iter().enumerate() {
         if areas[k] <= min_area {
-            return Err(None);
+            return Err(Rejection::Invalid);
         }
         let ratio = areas[k] * scale / topo.areas[f as usize];
         if ratio > max_distortion || ratio * max_distortion < 1.0 {
-            return Err(None);
+            return Err(Rejection::Invalid);
         }
     }
-    match first_overlap(local, uv, total_uv) {
-        None => Ok(()),
-        pair => Err(pair),
-    }
+    first_overlap(local, uv, total_uv).map_or(Ok(()), Err)
 }
 
 /// Grid-accelerated pairwise triangle overlap test: the first overlapping pair
-/// of chart faces, if any. A degenerate layout reports `(0, 0)`.
-fn first_overlap(local: &[[u32; 3]], uv: &[V2], total_area: f64) -> Option<(u32, u32)> {
+/// of chart faces, if any.
+fn first_overlap(local: &[[u32; 3]], uv: &[V2], total_area: f64) -> Option<Rejection> {
     let n = local.len();
     if n < 2 {
         return None;
@@ -458,17 +419,11 @@ fn first_overlap(local: &[[u32; 3]], uv: &[V2], total_area: f64) -> Option<(u32,
             ]
         })
         .collect();
-    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-    for p in uv {
-        for k in 0..2 {
-            lo[k] = lo[k].min(p[k]);
-            hi[k] = hi[k].max(p[k]);
-        }
-    }
+    let [lo, hi] = bounds2(uv.iter().copied());
     let cell =
         (2.0 * (total_area / n as f64).sqrt()).max((hi[0] - lo[0]).max(hi[1] - lo[1]) / 1024.0);
     if !(cell > 0.0) {
-        return Some((0, 0));
+        return Some(Rejection::Invalid); // degenerate layout
     }
     let gx = (((hi[0] - lo[0]) / cell) as usize + 1).min(1024);
     let gy = (((hi[1] - lo[1]) / cell) as usize + 1).min(1024);
@@ -523,7 +478,7 @@ fn first_overlap(local: &[[u32; 3]], uv: &[V2], total_area: f64) -> Option<(u32,
                         continue;
                     }
                     if triangles_overlap(&tris[a as usize], &tris[b as usize], eps) {
-                        return Some((a.min(b), a.max(b)));
+                        return Some(Rejection::Overlap(a.min(b), a.max(b)));
                     }
                 }
             }
@@ -595,25 +550,18 @@ fn finalize(
     mut uvs: Vec<V2>,
 ) -> Chart {
     let area: f64 = faces.iter().map(|&f| topo.areas[f as usize]).sum();
-    let uv_area: f64 = face_local
-        .iter()
-        .map(|t| signed_area2(uvs[t[0] as usize], uvs[t[1] as usize], uvs[t[2] as usize]))
-        .sum();
+    let uv_area = total_area(&face_local, &uvs);
     let k = if uv_area > 0.0 {
         (area / uv_area).sqrt()
     } else {
         1.0
     };
     let (c, s) = min_area_rect_dir(&convex_hull(&uvs));
-    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     for p in uvs.iter_mut() {
         let r = rotate(*p, c, s);
         *p = [r[0] * k, r[1] * k];
-        for i in 0..2 {
-            lo[i] = lo[i].min(p[i]);
-            hi[i] = hi[i].max(p[i]);
-        }
     }
+    let [lo, hi] = bounds2(uvs.iter().copied());
     for p in uvs.iter_mut() {
         *p = [p[0] - lo[0], p[1] - lo[1]];
     }

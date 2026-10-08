@@ -213,6 +213,25 @@ a slowdown is real, compare both builds with
   whose instance scales differ by 4× gives the largest instance 4× the
   padding (visible on spot with scales 2, 1, 0.5). Inherent to sharing UVs;
   callers with very different scales can split them into separate meshes.
+- Large scenes pack slowly with shape packing: 300 small tori (2485 charts)
+  take 1.6 s on a 1024 page, 8.2 s at 2048, 20.8 s at 4096 (rect: 31 ms).
+  Placement is ~99% of it, single-threaded; most of that is the rotated
+  searches of small late charts (a 90°-rotated strip is narrow, so the
+  row-width rejection in `Page::find` rarely fires). Tried (2026-10-08):
+  - jumping past rows too narrow for any mask row: exact, no gain (rows are
+    never that full);
+  - rotations searched in parallel on pages ≥ 2048: exact, 4096 20.8 → 12.3 s
+    (unmerged branch `packing-perf`);
+  - Blender-style coarse density search (grid capped near 1024, then one
+    full-resolution pack): 4096 → 5.2 s, −0.9 points;
+  - rotating only the largest N charts (Blender uses 50): ~10× faster
+    packing; N = 150 leaves the single models' utilization unchanged but
+    costs the tori scene 1.2 points; N = 50 costs nefertiti 2.2;
+  - xatlas flow (0°/90° only, per-size-bucket start positions): 1–5 points
+    worse on the single models (bunny −4.9) for 10–15% speed: our shape
+    packer relies on 180°/270° and full-page search to nest charts.
+  Decision: keep the exhaustive four-rotation search; revisit only for
+  large-scene users, preferring one of the above over new techniques.
 - Low utilization on small atlases is padding, not the packer: padding 2
   around 58 charts on a ~150 px page costs ~20 points (xatlas pads the same
   way: 8-neighbour dilation on both charts, plus a bilinear border by
@@ -227,18 +246,12 @@ a slowdown is real, compare both builds with
 
 ## Next steps (priority order)
 
-1. Shape packing on large pages: 300 small tori (2485 charts, 138K
-   triangles) take 1.5 s at a 1024 page, 8.2 s at 2048, 20.7 s at 4096
-   (rect packing: 31 ms; segmentation + parameterization: 39 ms). Packing is
-   ~18 bisection trials, each rasterizing and placing every chart. Ideas:
-   pack at reduced resolution first and refine, fewer trials (better
-   bounds from the first successful layout), reuse masks across nearby
-   densities, faster `Page::find` row skipping.
-2. Packaging and CI: `repository`/`documentation` metadata, `include` list,
+1. Packaging and CI: `repository`/`documentation` metadata, `include` list,
    absolute README image URL; CI with tests in both feature configs, `cargo
    fmt --check`, clippy `-D warnings`, a wasm32 build, and example output
    hashes compared across x86-64/ARM/wasm32 without `direct-solver`. Then
    publish 0.1.
-3. Deterministic direct solver (own sparse Cholesky), if cross-platform
+2. Deterministic direct solver (own sparse Cholesky), if cross-platform
    determinism must hold with the fast path.
-4. Bevy integration crate.
+3. Bevy integration crate.
+4. (Deferred) shape packing speed on large scenes; see the tuning notes.

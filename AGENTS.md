@@ -62,8 +62,11 @@ Crate goals (✅ done, ◐ partial, ☐ missing):
     `generate_with_progress` reports `Progress { stage, done, total }`
     (meshes, faces, packing trials, meshes) and cancels when the callback
     returns `false`. Latency is one in-flight chart solve (igea: ~0.13 s).
-11. ☐ **Repack existing UVs** (xatlas `AddUvMesh`): pack authored charts
-    without re-segmenting.
+11. ✅ **Repack existing UVs** (xatlas `AddUvMesh`, but better for
+    lightmaps): `MeshInput::uvs` makes each UV island one chart, scaled to
+    its 3D area (xatlas keeps UV scale) and rotated freely; mirrored islands
+    are flipped, invalid ones (flips, degenerate, self-overlap) unwrapped
+    normally. Spot: 14 charts, 70% utilization, half the time.
 12. ✅ **No global state or scheduler**: rayon only, safe to call any number
     of times from any thread; zero dependencies and single-threaded under
     `--no-default-features` for wasm. Keep it that way.
@@ -93,17 +96,21 @@ use case.
   exclusion (degenerate: altitude < 1e-6 × bbox diagonal, or ignored),
   manifold + consistently oriented adjacency within one material only. Edges
   where the input splits vertices (authored seams) are cut too, unless more
-  than half of all adjacent edges are split (flat shading).
+  than half of all adjacent edges are split (flat shading); with input UVs,
+  edges where the UVs differ are cut instead (always).
 - `src/segment.rs`: xatlas-style growth over planar regions: cost = normal
   deviation (crease-preserving smoothed normals, hard `max_chart_angle` cone)
   + straightness + roundness + crease penalty; then merge small enclosed
-  charts and smooth single-face teeth off boundaries.
+  charts and smooth single-face teeth off boundaries. `components` gives the
+  UV islands of meshes with input UVs (no segmentation).
 - `src/param.rs`: planar projection if flat, else LSCM; validate (no flips, no
   overlaps via grid + SAT, area ratio ≤ `max_area_distortion`); on failure
   split chart in two (graph-distance Voronoi, seeded at the overlapping pair
   when validation found an overlap) and retry, halves in parallel.
   Charts ≥ 1000 faces with |total curvature| > 3 rad are split without
   solving. Finalize: scale to 3D area, rotate to min-area rect.
+  `from_islands` keeps input UV islands (validated with unbounded distortion,
+  mirrored ones flipped) and falls back to the normal path per island.
 - `src/progress.rs`: `Stage`, `Progress`, and `Ctx` (callback behind a mutex
   so reports are serialized and monotonic, plus an `AtomicBool` that
   parameterization polls; `QUIET` for nested packing).
@@ -196,11 +203,10 @@ a slowdown is real, compare both builds with
 
 ## Next steps (priority order)
 
-1. Repacking existing UVs (xatlas `AddUvMesh`).
-2. CI (tests in both feature configs, wasm32 build, example output hashes
+1. CI (tests in both feature configs, wasm32 build, example output hashes
    compared across x86-64/ARM/wasm32 without `direct-solver`), then publish
    0.1 to crates.io; refresh `docs/atlases.png` (still shows the old
    rect-packed atlases).
-3. Deterministic direct solver (own sparse Cholesky), if cross-platform
+2. Deterministic direct solver (own sparse Cholesky), if cross-platform
    determinism must hold with the fast path.
-4. Bevy integration crate.
+3. Bevy integration crate.

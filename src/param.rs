@@ -46,6 +46,57 @@ pub(crate) fn parameterize_all(topo: &Topology, groups: Vec<Vec<u32>>, max_disto
     }
 }
 
+/// Charts from the mesh's own UV islands, where `face_uvs[f]` holds the input
+/// UVs of face `f`'s corners. Each island is kept as one chart (mirrored
+/// islands flipped back) unless it is unusable as is (flipped or degenerate
+/// triangles, self-overlap), in which case it is parameterized like any group.
+pub(crate) fn from_islands(topo: &Topology, islands: Vec<Vec<u32>>, face_uvs: &[[V2; 3]], max_distortion: f64, ctx: &Ctx, total: usize) -> Vec<Chart> {
+    let job = Job { topo, max_distortion, ctx, total };
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        islands.into_par_iter().flat_map_iter(|g| island(&job, g, face_uvs)).collect()
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        islands.into_iter().flat_map(|g| island(&job, g, face_uvs)).collect()
+    }
+}
+
+fn island(job: &Job, faces: Vec<u32>, face_uvs: &[[V2; 3]]) -> Vec<Chart> {
+    if job.ctx.is_cancelled() {
+        return Vec::new();
+    }
+    // Local vertices by (welded vertex, UV): a vertex keeps one UV per island
+    // even where the island touches itself at a vertex.
+    let mut map: HashMap<(u32, [u64; 2]), u32> = HashMap::with_capacity(faces.len());
+    let (mut verts, mut uvs) = (Vec::new(), Vec::new());
+    let local: Vec<[u32; 3]> = faces
+        .iter()
+        .map(|&f| {
+            let w = job.topo.faces[f as usize];
+            [0, 1, 2].map(|c| {
+                let uv = face_uvs[f as usize][c];
+                *map.entry((w[c], uv.map(f64::to_bits))).or_insert_with(|| {
+                    verts.push(w[c]);
+                    uvs.push(uv);
+                    (verts.len() - 1) as u32
+                })
+            })
+        })
+        .collect();
+    let twice_area: f64 = local.iter().map(|t| signed_area2(uvs[t[0] as usize], uvs[t[1] as usize], uvs[t[2] as usize])).sum();
+    if twice_area < 0.0 {
+        // Mirrored island: flip it so its triangles wind counter-clockwise.
+        uvs.iter_mut().for_each(|p| p[0] = -p[0]);
+    }
+    // Authored UVs are kept however distorted; only validity is required.
+    if validate(job.topo, &faces, &local, &uvs, f64::INFINITY).is_ok() {
+        return job.done(job.topo, faces, verts, local, uvs);
+    }
+    parameterize_group(job, faces)
+}
+
 struct Job<'a> {
     topo: &'a Topology,
     max_distortion: f64,

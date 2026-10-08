@@ -38,6 +38,9 @@ seams) become chart boundaries. Optional per-mesh inputs:
   rectangle in the atlas (`OutputMesh::instances`), the way engines lightmap
   shared meshes (e.g. Bevy's `Lightmap::uv_rect`). With one instance this
   also keeps a mesh on a single page.
+- `uvs`: existing UVs to repack instead of unwrapping: each UV island
+  becomes one chart, rescaled to its surface area for uniform texel density.
+  Mirrored islands are flipped; unusable ones are unwrapped normally.
 
 Try it on an OBJ file (writes an OBJ with `vt` coordinates plus an SVG per page):
 
@@ -111,7 +114,6 @@ is true surface area over atlas area.
 
 - **Determinism**: cross-platform identical output with the fast direct
   solver too, and CI comparing output hashes across architectures.
-- **Repacking existing UVs** without re-segmenting.
 - **Integrations** (after the above): a Bevy crate.
 
 ## License

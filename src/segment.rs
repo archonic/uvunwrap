@@ -227,6 +227,33 @@ fn cost(reg: &Regions, chart_of: &[u32], c: u32, st: &ChartState, r: usize, cos_
     (c <= MAX_COST).then_some(c)
 }
 
+/// Connected components of the non-excluded faces (the UV islands, for a mesh
+/// with input UVs), each in ascending face order.
+pub(crate) fn components(topo: &Topology) -> Vec<Vec<u32>> {
+    let mut seen: Vec<bool> = topo.excluded.clone();
+    let mut out = Vec::new();
+    for seed in 0..topo.faces.len() {
+        if seen[seed] {
+            continue;
+        }
+        seen[seed] = true;
+        let mut members = vec![seed as u32];
+        let mut i = 0;
+        while i < members.len() {
+            for &g in &topo.neighbors[members[i] as usize] {
+                if g != NONE && !seen[g as usize] {
+                    seen[g as usize] = true;
+                    members.push(g);
+                }
+            }
+            i += 1;
+        }
+        members.sort_unstable();
+        out.push(members);
+    }
+    out
+}
+
 /// Splits the non-excluded faces into connected charts whose (smoothed)
 /// face normals lie within `max_angle` radians of the chart's average normal.
 pub(crate) fn segment(topo: &Topology, max_angle: f64) -> Vec<Vec<u32>> {

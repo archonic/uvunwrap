@@ -23,7 +23,8 @@ pub(crate) struct Topology {
     /// Only manifold, consistently oriented edges between non-excluded faces
     /// of the same material produce adjacency; everything else is treated as
     /// a boundary (a seam). So are edges where the input mesh is split (hard
-    /// edges, UV seams), unless most edges are split (e.g. flat shading).
+    /// edges, UV seams), unless most edges are split (e.g. flat shading), or,
+    /// when the mesh has input UVs, edges where those UVs differ.
     pub neighbors: Vec<[u32; 3]>,
 }
 
@@ -102,6 +103,12 @@ impl Topology {
         let material = |f: u32| mesh.face_materials.map_or(0, |m| m[f as usize]);
         // Input (unwelded) vertex at corner `c` of face `f`.
         let corner = |f: u32, c: usize| indices[f as usize * 3 + c % 3];
+        // Whether two input vertices at the same position are split: by their
+        // UVs if given (UV seams), else by being different vertices.
+        let differ = |a: u32, b: u32| match mesh.uvs {
+            Some(uv) => uv[a as usize] != uv[b as usize],
+            None => a != b,
+        };
         let mut neighbors = vec![[NONE; 3]; nf];
         // Adjacent pairs across split edges: cut afterwards if they're rare
         // enough to be authored seams rather than flat shading.
@@ -123,13 +130,13 @@ impl Topology {
                     neighbors[f2 as usize][e2 as usize] = f1;
                     joined += 1;
                     let (e1, e2) = (e1 as usize, e2 as usize);
-                    if corner(f1, e1) != corner(f2, e2 + 1) || corner(f1, e1 + 1) != corner(f2, e2) {
+                    if differ(corner(f1, e1), corner(f2, e2 + 1)) || differ(corner(f1, e1 + 1), corner(f2, e2)) {
                         split.push([(f1, e1), (f2, e2)]);
                     }
                 }
             }
         }
-        if split.len() * 2 <= joined {
+        if mesh.uvs.is_some() || split.len() * 2 <= joined {
             for (f, e) in split.into_iter().flatten() {
                 neighbors[f as usize][e] = NONE;
             }

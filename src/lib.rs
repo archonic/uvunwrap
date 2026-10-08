@@ -100,11 +100,18 @@ pub struct MeshInput<'a> {
     /// drawn several times (e.g. Bevy's `Lightmap::uv_rect`), and with a single
     /// instance it keeps a mesh on one page. Each must be finite and `> 0`.
     pub instances: &'a [f32],
+    /// Optional existing texture coordinates (one per vertex) to repack
+    /// instead of unwrapping from scratch: each UV island (faces connected
+    /// through identical UVs) becomes one chart, scaled to its surface area so
+    /// texel density stays uniform, and rotated freely. Mirrored islands are
+    /// flipped; islands with flipped or degenerate triangles or self-overlap
+    /// are unwrapped normally. Default `None`.
+    pub uvs: Option<&'a [[f32; 2]]>,
 }
 
 impl Default for MeshInput<'_> {
     fn default() -> Self {
-        MeshInput { positions: &[], indices: &[], face_materials: None, face_ignore: None, scale: 1.0, instances: &[] }
+        MeshInput { positions: &[], indices: &[], face_materials: None, face_ignore: None, scale: 1.0, instances: &[], uvs: None }
     }
 }
 
@@ -276,6 +283,15 @@ pub enum Error {
         /// Number of triangles in the mesh.
         face_count: usize,
     },
+    /// [`MeshInput::uvs`] doesn't have one entry per vertex.
+    UvCount {
+        /// Mesh position in the input slice.
+        mesh: usize,
+        /// Number of UVs.
+        len: usize,
+        /// Number of vertices in the mesh.
+        vertex_count: usize,
+    },
     /// [`MeshInput::scale`] or an instance scale is not finite and positive.
     InvalidScale {
         /// Mesh position in the input slice.
@@ -310,6 +326,9 @@ impl fmt::Display for Error {
             }
             Error::FaceDataLength { mesh, len, face_count } => {
                 write!(f, "mesh {mesh}: per-face data has {len} entries for {face_count} triangles")
+            }
+            Error::UvCount { mesh, len, vertex_count } => {
+                write!(f, "mesh {mesh}: {len} uvs for {vertex_count} vertices")
             }
             Error::InvalidScale { mesh } => write!(f, "mesh {mesh}: scale must be finite and > 0"),
             Error::InvalidOption(msg) => write!(f, "invalid option: {msg}"),
@@ -360,6 +379,9 @@ fn validate_mesh(mi: usize, m: &MeshInput<'_>) -> Result<(), Error> {
     if let Some(len) = lens.into_iter().flatten().find(|&l| l != face_count) {
         return Err(Error::FaceDataLength { mesh: mi, len, face_count });
     }
+    if let Some(uvs) = m.uvs.filter(|u| u.len() != m.positions.len()) {
+        return Err(Error::UvCount { mesh: mi, len: uvs.len(), vertex_count: m.positions.len() });
+    }
     if !(m.scale > 0.0 && m.scale.is_finite()) || m.instances.iter().any(|k| !(*k > 0.0 && k.is_finite())) {
         return Err(Error::InvalidScale { mesh: mi });
     }
@@ -406,15 +428,23 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
     let mut segmented = Vec::with_capacity(meshes.len());
     for m in meshes {
         let topo = Topology::build(m);
-        let groups = segment::segment(&topo, max_angle);
+        let groups = if m.uvs.is_some() { segment::components(&topo) } else { segment::segment(&topo, max_angle) };
         segmented.push((topo, groups));
         ctx.advance(progress::Stage::Segmenting, 1, meshes.len())?;
     }
     let faces: usize = segmented.iter().flat_map(|(_, g)| g).map(Vec::len).sum();
     let per_mesh: Vec<(Topology, Vec<param::Chart>)> = segmented
         .into_iter()
-        .map(|(topo, groups)| {
-            let charts = param::parameterize_all(&topo, groups, max_distortion, ctx, faces);
+        .zip(meshes)
+        .map(|((topo, groups), m)| {
+            let charts = match m.uvs {
+                None => param::parameterize_all(&topo, groups, max_distortion, ctx, faces),
+                Some(uvs) => {
+                    let face_uvs: Vec<[[f64; 2]; 3]> =
+                        m.indices.chunks_exact(3).map(|t| [0, 1, 2].map(|c| uvs[t[c] as usize].map(f64::from))).collect();
+                    param::from_islands(&topo, groups, &face_uvs, max_distortion, ctx, faces)
+                }
+            };
             (topo, charts)
         })
         .collect();

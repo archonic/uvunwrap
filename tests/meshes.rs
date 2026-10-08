@@ -592,3 +592,78 @@ fn progress_callback_can_cancel_in_any_stage() {
     });
     assert!(matches!(result, Err(Error::Cancelled)));
 }
+
+/// Plane split down the middle (x = 1) like `authored_seams_become_chart_boundaries`.
+fn split_plane() -> Mesh {
+    let mut m = plane(12);
+    let right = right_of(&m, 1.0);
+    let mut copies = std::collections::HashMap::new();
+    for (f, t) in m.indices.chunks_exact_mut(3).enumerate() {
+        for i in t.iter_mut().filter(|_| right[f]) {
+            if m.positions[*i as usize][0] == 1.0 {
+                *i = *copies.entry(*i).or_insert_with(|| {
+                    m.positions.push(m.positions[*i as usize]);
+                    (m.positions.len() - 1) as u32
+                });
+            }
+        }
+    }
+    m
+}
+
+fn run_uvs(m: &Mesh, uvs: &[[f32; 2]]) -> Atlas {
+    let atlas = generate(&[MeshInput { uvs: Some(uvs), ..m.input() }], &Options::default()).unwrap();
+    check(&atlas, &[m]);
+    atlas
+}
+
+#[test]
+fn input_uv_islands_become_charts() {
+    // Continuous UVs across a vertex split (e.g. a hard edge): one island.
+    let m = split_plane();
+    let uvs: Vec<[f32; 2]> = m.positions.iter().map(|p| [p[0], p[1]]).collect();
+    assert_eq!(run_uvs(&m, &uvs).chart_count, 1);
+    // A UV seam on welded geometry: two islands.
+    let m = plane(12);
+    let right = right_of(&m, 1.0);
+    let mut uv_mesh = Mesh { positions: Vec::new(), indices: Vec::new() };
+    let mut uvs = Vec::new();
+    for (f, t) in m.indices.chunks_exact(3).enumerate() {
+        for &i in t {
+            let p = m.positions[i as usize];
+            uv_mesh.indices.push(uv_mesh.positions.len() as u32);
+            uv_mesh.positions.push(p);
+            uvs.push([p[0] + if right[f] { 5.0 } else { 0.0 }, p[1]]);
+        }
+    }
+    let atlas = run_uvs(&uv_mesh, &uvs);
+    assert_eq!(atlas.chart_count, 2);
+    let out = &atlas.meshes[0];
+    for f in 0..right.len() {
+        assert_eq!(face_chart(out, f) == face_chart(out, 0), right[f] == right[0]);
+    }
+}
+
+#[test]
+fn input_uvs_are_normalized_mirrored_or_replaced() {
+    let m = plane(8); // 2 x 1 units
+    let total = |out: &uvunwrap::OutputMesh| (0..out.indices.len() / 3).map(|f| uv_area(out, f)).sum::<f64>();
+    // Scale doesn't matter: islands are sized by surface area.
+    let small: Vec<[f32; 2]> = m.positions.iter().map(|p| [p[0] * 0.1, p[1] * 0.1]).collect();
+    let big: Vec<[f32; 2]> = m.positions.iter().map(|p| [p[0] * 10.0, p[1] * 10.0]).collect();
+    let both = generate(&[MeshInput { uvs: Some(&small), ..m.input() }, MeshInput { uvs: Some(&big), ..m.input() }], &Options::default()).unwrap();
+    check(&both, &[&m, &m]);
+    let ratio = total(&both.meshes[0]) / total(&both.meshes[1]);
+    assert!((ratio - 1.0).abs() < 1e-3, "area ratio {ratio}");
+    // Mirrored, degenerate and folded (self-overlapping) islands all come out
+    // valid (`check`: counter-clockwise, no overlaps).
+    let mirrored: Vec<[f32; 2]> = m.positions.iter().map(|p| [-p[0], p[1]]).collect();
+    assert_eq!(run_uvs(&m, &mirrored).chart_count, 1);
+    run_uvs(&m, &vec![[0.0, 0.0]; m.positions.len()]);
+    let folded: Vec<[f32; 2]> = m.positions.iter().map(|p| [(p[0] - 1.0).abs(), p[1]]).collect();
+    // The flat plane re-unwraps as one (unfolded) chart.
+    assert_eq!(run_uvs(&m, &folded).chart_count, 1);
+    let short = [[0.0f32; 2]; 3];
+    let bad = MeshInput { uvs: Some(&short), ..m.input() };
+    assert!(matches!(generate(&[bad], &Options::default()), Err(Error::UvCount { len: 3, .. })));
+}

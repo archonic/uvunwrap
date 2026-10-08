@@ -58,7 +58,9 @@ cargo run --release --example unwrap -- model.obj out/model
    they nest into each other's concavities and holes, with 90° rotations.
    Texel density is automatic (fit one page) or fixed (one growing page, or
    multiple fixed-size pages). `Packing::Rect` packs bounding rectangles with
-   a skyline packer instead: faster, but less dense.
+   a skyline packer instead: faster, but less dense. `max_chart_size` scales
+   oversized charts down; `block_align` gives every chart its own 4×4 texel
+   blocks for block-compressed lightmaps.
 
 ## Features
 
@@ -100,7 +102,7 @@ is true surface area over atlas area.
 
 - **Determinism**: cross-platform identical output with the fast direct
   solver too, and CI comparing output hashes across architectures.
-- **xatlas parity**: maximum chart size, 4×4 block alignment, winding fixes.
+- **Fixed-density packing**: better utilization on small atlases.
 - **Multi-mesh**: one page per mesh, per-mesh bounds; progress and
   cancellation; repacking existing UVs.
 - **Integrations** (after the above): a Bevy crate.

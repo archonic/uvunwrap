@@ -2,7 +2,8 @@
 //! drawing of each atlas page.
 //!
 //! ```text
-//! cargo run --release --example unwrap -- [--rect] [--flat] [input.obj] [output_prefix]
+//! cargo run --release --example unwrap -- [--rect] [--flat] [--block-align]
+//!     [--texels-per-unit X] [--max-chart-size N] [--padding N] [input.obj] [output_prefix]
 //! ```
 //!
 //! Vertices are split per distinct `v/vt/vn` corner, as an engine import
@@ -92,6 +93,22 @@ fn main() {
         args.remove(i);
     }
     let flat = args.iter().position(|a| a == "--flat").map(|i| args.remove(i)).is_some();
+    opts.block_align = args.iter().position(|a| a == "--block-align").map(|i| args.remove(i)).is_some();
+    let mut value = |name: &str| {
+        let i = args.iter().position(|a| a == name)?;
+        args.remove(i);
+        Some(args.remove(i))
+    };
+    if let Some(v) = value("--texels-per-unit") {
+        opts.texels_per_unit = Some(v.parse().expect("--texels-per-unit"));
+        opts.resolution = 0;
+    }
+    if let Some(v) = value("--max-chart-size") {
+        opts.max_chart_size = v.parse().expect("--max-chart-size");
+    }
+    if let Some(v) = value("--padding") {
+        opts.padding = v.parse().expect("--padding");
+    }
     let (positions, indices, prefix) = match args.first() {
         Some(path) => {
             let (p, i) = load_obj(&fs::read_to_string(path).expect("read input"));

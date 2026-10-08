@@ -393,3 +393,87 @@ fn output_is_deterministic() {
         }
     }
 }
+
+/// Texel-space extent of a mesh's UVs: `(min, max)`.
+fn texel_bounds(atlas: &Atlas, out: &uvunwrap::OutputMesh) -> ([f64; 2], [f64; 2]) {
+    let dims = [atlas.width as f64, atlas.height as f64];
+    let mut lo = [f64::MAX; 2];
+    let mut hi = [f64::MIN; 2];
+    for v in &out.vertices {
+        for k in 0..2 {
+            lo[k] = lo[k].min(v.uv[k] as f64 * dims[k]);
+            hi[k] = hi[k].max(v.uv[k] as f64 * dims[k]);
+        }
+    }
+    (lo, hi)
+}
+
+#[test]
+fn max_chart_size_scales_down_big_charts_only() {
+    let (big, small) = (plane(4), plane(1)); // both 2 x 1 units
+    let small_input = MeshInput { scale: 0.1, ..small.input() };
+    let opts = Options { texels_per_unit: Some(64.0), resolution: 0, padding: 1, max_chart_size: 32, ..Options::default() };
+    let atlas = generate(&[big.input(), small_input], &opts).unwrap();
+    check(&atlas, &[&big, &small]);
+    let (lo, hi) = texel_bounds(&atlas, &atlas.meshes[0]);
+    let side = (hi[0] - lo[0]).max(hi[1] - lo[1]);
+    assert!(side <= 32.0 && side > 31.0, "big chart side {side}");
+    // The small chart (0.2 x 0.1 units, 12.8 texels) keeps the full density.
+    let (lo, hi) = texel_bounds(&atlas, &atlas.meshes[1]);
+    let side = (hi[0] - lo[0]).max(hi[1] - lo[1]);
+    assert!((side - 12.8).abs() < 1e-3, "small chart side {side}");
+}
+
+/// Whether a UV triangle (in texels) overlaps the open 4x4 block at `(bx, by)`.
+fn touches_block(t: &[[f64; 2]; 3], bx: u32, by: u32) -> bool {
+    let (x0, y0) = (bx as f64 * 4.0, by as f64 * 4.0);
+    let (x1, y1) = (x0 + 4.0, y0 + 4.0);
+    overlap(t, &[[x0, y0], [x1, y0], [x1, y1]]) || overlap(t, &[[x0, y0], [x1, y1], [x0, y1]])
+}
+
+#[test]
+fn block_align_gives_each_chart_its_own_blocks() {
+    let (a, b) = (torus(32, 16), cube());
+    for packing in [uvunwrap::Packing::Shape, uvunwrap::Packing::Rect] {
+        for opts in [
+            Options { block_align: true, padding: 0, resolution: 256, packing, ..Options::default() },
+            Options { block_align: true, padding: 1, texels_per_unit: Some(40.0), resolution: 0, packing, ..Options::default() },
+        ] {
+            let atlas = run(&[&a, &b], &opts);
+            assert_eq!((atlas.width % 4, atlas.height % 4), (0, 0));
+            let mut owner = std::collections::HashMap::new();
+            for out in &atlas.meshes {
+                for t in out.indices.chunks_exact(3) {
+                    let vs = [0, 1, 2].map(|c| out.vertices[t[c] as usize]);
+                    let p = vs.map(|v| [v.uv[0] as f64 * atlas.width as f64, v.uv[1] as f64 * atlas.height as f64]);
+                    let Some(chart) = vs[0].chart else { continue };
+                    let lo = [0, 1].map(|k| (p.iter().map(|q| q[k]).fold(f64::MAX, f64::min) / 4.0).floor() as u32);
+                    let hi = [0, 1].map(|k| (p.iter().map(|q| q[k]).fold(f64::MIN, f64::max) / 4.0).floor() as u32);
+                    for by in lo[1]..=hi[1] {
+                        for bx in lo[0]..=hi[0] {
+                            if touches_block(&p, bx, by) {
+                                let o = *owner.entry((vs[0].page, bx, by)).or_insert(chart);
+                                assert_eq!(o, chart, "block ({bx}, {by}) shared by charts {o} and {chart} ({packing:?})");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let bad = Options { block_align: true, resolution: 1022, ..Options::default() };
+    assert!(matches!(generate(&[], &bad), Err(Error::InvalidOption(_))));
+}
+
+#[test]
+fn inconsistently_wound_input_still_gets_ccw_uvs() {
+    // Every 5th triangle reversed; `check` asserts each output triangle is
+    // counter-clockwise in UV space in its own index order.
+    let mut m = torus(24, 12);
+    for (f, t) in m.indices.chunks_exact_mut(3).enumerate() {
+        if f % 5 == 0 {
+            t.swap(1, 2);
+        }
+    }
+    run(&[&m], &Options::default());
+}

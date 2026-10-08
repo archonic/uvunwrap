@@ -122,6 +122,22 @@ impl Skyline {
     }
 }
 
+/// `x` rounded up to a multiple of `b`.
+fn round_up(x: u32, b: u32) -> u32 {
+    x.div_euclid(b).saturating_add(u32::from(x % b != 0)).saturating_mul(b)
+}
+
+/// Texel density for one chart: `s`, reduced so the chart's larger content
+/// side stays within `max_size` texels (0: no limit).
+pub(crate) fn chart_density(size: V2, s: f64, max_size: u32) -> f64 {
+    let side = size[0].max(size[1]);
+    if max_size == 0 || !(side * s > max_size as f64) {
+        return s;
+    }
+    // Just under the limit, so rounding up in `content_size` can't exceed it.
+    s.min(max_size as f64 / side * (1.0 - 1e-9))
+}
+
 /// What the packer needs to know about a chart.
 pub(crate) struct ChartGeom<'a> {
     /// UVs in world units, minimum at the origin.
@@ -136,26 +152,41 @@ pub(crate) struct Packer<'a> {
     pub padding: u32,
     pub allow_rotation: bool,
     pub method: Packing,
+    /// Largest chart side in texels (0: no limit); bigger charts are scaled down.
+    pub max_chart_size: u32,
+    /// Charts occupy whole `block × block` texel blocks, never sharing one
+    /// (1: no alignment).
+    pub block: u32,
 }
 
 /// Placements plus the used `(width, height)` of each page.
 type Trial = (Vec<Placement>, Vec<(u32, u32)>);
 
 impl Packer<'_> {
+    /// Padded chart rectangles in texels, rounded up to whole blocks.
     fn rects(&self, s: f64) -> Vec<(u32, u32)> {
         let pad = 2 * self.padding;
+        let b = self.block;
         self.charts
             .iter()
             .map(|c| {
-                let (w, h) = content_size(c.size, s);
-                (w.saturating_add(pad), h.saturating_add(pad))
+                let (w, h) = content_size(c.size, chart_density(c.size, s, self.max_chart_size));
+                (round_up(w.saturating_add(pad), b), round_up(h.saturating_add(pad), b))
             })
             .collect()
     }
 
+    /// Chart masks in blocks.
     fn masks(&self, s: f64) -> Vec<ChartMasks> {
         let rotations = if self.allow_rotation { 4 } else { 1 };
-        let one = |c: &ChartGeom| chart_masks(c.uvs, c.tris, c.size, s, self.padding, rotations);
+        let one = |c: &ChartGeom| {
+            let m = chart_masks(c.uvs, c.tris, c.size, chart_density(c.size, s, self.max_chart_size), self.padding, rotations);
+            if self.block > 1 {
+                ChartMasks { rot: m.rot.iter().map(|r| r.downsample(self.block)).collect() }
+            } else {
+                m
+            }
+        };
         #[cfg(feature = "parallel")]
         {
             use rayon::prelude::*;
@@ -167,17 +198,29 @@ impl Packer<'_> {
         }
     }
 
-    /// Packs at density `s` into pages of `width × height`, using at most
-    /// `max_pages`. `None` if it doesn't fit.
+    /// Packs at density `s` into pages of `width × height` texels, using at
+    /// most `max_pages`. `None` if it doesn't fit.
     fn trial(&self, s: f64, width: u32, height: u32, max_pages: usize) -> Option<Trial> {
-        match self.method {
+        // Pack in block units, then scale back to texels.
+        let b = self.block;
+        let (bw, bh) = (width / b, if height == u32::MAX { u32::MAX } else { height / b });
+        let (mut placements, mut used) = match self.method {
             Packing::Rect => {
-                let r = self.rects(s);
-                let (placements, pages) = try_pack(&r, width, height, max_pages, self.allow_rotation)?;
-                Some((placements, pages.iter().map(|p| (p.width, p.used_height)).collect()))
+                let r: Vec<(u32, u32)> = self.rects(s).iter().map(|&(w, h)| (w / b, h / b)).collect();
+                let (placements, pages) = try_pack(&r, bw, bh, max_pages, self.allow_rotation)?;
+                (placements, pages.iter().map(|p| (p.width, p.used_height)).collect::<Vec<_>>())
             }
-            Packing::Shape => shape_pack(&self.masks(s), width, height, max_pages),
+            Packing::Shape => shape_pack(&self.masks(s), bw, bh, max_pages)?,
+        };
+        if b > 1 {
+            for p in &mut placements {
+                (p.x, p.y) = (p.x * b, p.y * b);
+            }
+            for u in &mut used {
+                *u = (u.0 * b, u.1 * b);
+            }
         }
+        Some((placements, used))
     }
 
 }
@@ -279,6 +322,7 @@ pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32
             let fill = if p.method == Packing::Shape { 0.8 } else { 1.15 };
             let max_side = r.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(1);
             let width = max_side.max((bbox * fill).sqrt().ceil() as u32);
+            let width = round_up(width, p.block);
             let (placements, used) = p.trial(s, width, u32::MAX, 1).expect("unbounded page always fits");
             Ok(PackResult { placements, width: used[0].0.max(1), height: used[0].1.max(1), pages: 1, texels_per_unit: s })
         }

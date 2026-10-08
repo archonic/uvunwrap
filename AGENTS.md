@@ -46,12 +46,16 @@ Crate goals (✅ done, ◐ partial, ☐ missing):
    Missing: `direct-solver` (faer) picks SIMD kernels at runtime, so it can
    differ across architectures; fixing that needs a deterministic sparse
    Cholesky of our own.
-7. ☐ **Maximum chart size** (xatlas `maxChartSize`): charts bigger than a
-   limit are scaled down rather than growing the page or failing.
-8. ☐ **Block alignment** (xatlas `blockAlign`): charts on a 4×4 texel grid
-   for block-compressed lightmaps.
-9. ◐ **Inconsistent winding** (xatlas `fixWinding`): flipped faces are
-   currently cut off as separate charts rather than fixed.
+7. ✅ **Maximum chart size** (xatlas `maxChartSize`): `Options::max_chart_size`
+   scales bigger charts down (per-chart density) instead of growing the page
+   or failing.
+8. ✅ **Block alignment** (xatlas `blockAlign`): `Options::block_align`; each
+   chart owns whole 4×4 blocks (masks downsampled to blocks, packed in block
+   units), costing 1–4 points of utilization.
+9. ✅ **Consistent UV winding** (xatlas `fixWinding`, which is about output
+   UV orientation): every output triangle is CCW in UV in its input index
+   order, including inconsistently wound input (those faces become separate
+   charts).
 10. ☐ **Progress and cancellation** (xatlas `ProgressCallback`), so large
     unwraps can run as background tasks.
 11. ☐ **Repack existing UVs** (xatlas `AddUvMesh`): pack authored charts
@@ -105,7 +109,9 @@ use case.
 - `src/pack.rs`: `Packing::Shape` (masks, default) or `Packing::Rect`
   (skyline); auto density (bisection to fit one page, seeded by the rect
   result, cropped to used height), fixed density (single growing page or
-  multiple fixed pages).
+  multiple fixed pages). Per-chart density (`chart_density`) applies
+  `max_chart_size`; `block_align` packs in 4×4 block units (`Mask::downsample`,
+  rects rounded up) and scales placements back to texels.
 - `tests/meshes.rs`: plane, cube, sphere, torus, cylinder, soup, degenerates,
   errors; checks topology preservation, UV range, no flips, no overlaps.
 - `examples/unwrap.rs`: OBJ in (one vertex per `v/vt/vn` corner, like an
@@ -166,7 +172,10 @@ machine is often loaded, so multi-core timings are noisy.
 
 ## Next steps (priority order)
 
-1. xatlas parity: maximum chart size, 4×4 block alignment, winding fixing.
+1. Fixed-density packing quality: on small atlases (bunny at 400 texels/unit,
+   ~134×158) utilization is ~43% vs ~66% in auto mode. This is the mode
+   engines use (Godot: `texelsPerUnit = 1 / texel_size`); check the page
+   width heuristic and padding overhead.
 2. Multi-mesh: one page per mesh option, per-mesh bounds.
 3. Progress/cancellation; repacking existing UVs.
 4. CI (tests in both feature configs, wasm32 build, example output hashes

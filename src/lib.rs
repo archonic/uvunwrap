@@ -119,9 +119,23 @@ pub struct Options {
     /// generating mipmaps. Default `2`.
     pub padding: u32,
     /// Allow rotating charts by multiples of 90° during packing. Default `true`.
+    ///
+    /// Rotations are proper (never mirrored): every output triangle is
+    /// counter-clockwise in UV space in its input index order, even where the
+    /// input winding is inconsistent (what xatlas calls `fixWinding`).
     pub allow_rotation: bool,
     /// Packing algorithm. Default [`Packing::Shape`].
     pub packing: Packing,
+    /// Largest chart width or height in texels, excluding padding (`0`: no
+    /// limit). Bigger charts are scaled down to fit instead of growing the page
+    /// or failing, so they get a lower texel density than the rest. Default `0`.
+    pub max_chart_size: u32,
+    /// Align charts to 4×4 texel blocks: every chart, with its padding,
+    /// occupies whole blocks at block-aligned positions and no two charts share
+    /// a block, so block-compressed (BC/ASTC 4×4) atlases don't bleed between
+    /// charts. Page sizes become multiples of 4; `resolution` must be one.
+    /// Default `false`.
+    pub block_align: bool,
 }
 
 /// How charts are arranged in the atlas.
@@ -146,6 +160,8 @@ impl Default for Options {
             padding: 2,
             allow_rotation: true,
             packing: Packing::Shape,
+            max_chart_size: 0,
+            block_align: false,
         }
     }
 }
@@ -159,7 +175,8 @@ pub struct Atlas {
     pub height: u32,
     /// Number of atlas pages (see [`OutputVertex::page`]).
     pub page_count: u32,
-    /// Texel density that was used.
+    /// Texel density that was used (charts scaled down by
+    /// [`Options::max_chart_size`] have less).
     pub texels_per_unit: f32,
     /// Total number of charts across all meshes.
     pub chart_count: u32,
@@ -286,6 +303,9 @@ fn validate_options(o: &Options) -> Result<(), Error> {
             return Err(Error::InvalidOption("texels_per_unit must be finite and > 0"));
         }
     }
+    if o.block_align && o.resolution % 4 != 0 {
+        return Err(Error::InvalidOption("resolution must be a multiple of 4 with block_align"));
+    }
     if o.resolution > 0 && o.padding.saturating_mul(2) >= o.resolution {
         return Err(Error::InvalidOption("padding too large for resolution"));
     }
@@ -345,6 +365,8 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
         padding: options.padding,
         allow_rotation: options.allow_rotation,
         method: options.packing,
+        max_chart_size: options.max_chart_size,
+        block: if options.block_align { 4 } else { 1 },
     };
     let packed = pack::pack(&packer, options.texels_per_unit.map(f64::from), options.resolution)?;
     let s = packed.texels_per_unit;
@@ -362,6 +384,7 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
         let mut uvs: Vec<Vec<[f32; 2]>> = Vec::with_capacity(charts.len());
         for (ci, ch) in charts.iter().enumerate() {
             let pl = packed.placements[chart_base + ci];
+            let s = pack::chart_density(ch.size, s, options.max_chart_size);
             covered += ch.area * s * s;
             for (k, &f) in ch.faces.iter().enumerate() {
                 face_chart[f as usize] = ci as u32;

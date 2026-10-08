@@ -85,6 +85,19 @@ impl Mask {
         m
     }
 
+    /// The mask in units of `b × b` texel blocks: a block is covered if any
+    /// of its texels is.
+    pub(crate) fn downsample(&self, b: u32) -> Mask {
+        let up = |x: u32| x / b + u32::from(x % b != 0);
+        let mut bits = Bits::new(up(self.w), up(self.h));
+        for r in 0..self.h {
+            for &[a, e] in self.row(r) {
+                bits.fill(r / b, a / b, up(e));
+            }
+        }
+        Mask::from_bits(&bits)
+    }
+
     /// The mask rotated by 90° counter-clockwise (texel `(c, r)` moves to
     /// `(h - 1 - r, c)`), matching [`rotate_texel`] with rotation 1.
     fn rotate90(&self) -> Mask {

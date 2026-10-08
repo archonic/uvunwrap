@@ -172,6 +172,8 @@ use case.
 
 - Run `cargo fmt` (default settings, no `rustfmt.toml`) before every commit;
   `cargo fmt --check` must pass.
+- Commits are authored by Joshua Flark <joshuajmark@gmail.com>, with no
+  `Co-Authored-By` or other AI attribution trailers.
 - `#![forbid(unsafe_code)]`, `#![warn(missing_docs)]`.
 - Zero dependencies with `--no-default-features`; must stay wasm-friendly.
 - Never commit downloaded models or `out/`.

@@ -5,59 +5,74 @@ parameterization → atlas packing.
 
 ## Goal
 
-Give Rust, and Bevy in particular, a native way to generate a fresh,
-non-overlapping UV set for arbitrary triangle meshes, both at build time and at
-runtime (including wasm). The only alternative today is `xatlas-rs`, which
-binds stale C++. Bevy renders lightmaps from `ATTRIBUTE_UV_1`, with a
-`Lightmap { image, uv_rect }` component so many meshes can share one atlas
-texture. It has no unwrapper or baker of its own, so procedural, CSG, voxel and
-imported meshes without a second UV set can't be lightmapped or baked. Lighting
-bakers, texture painting, decals and AO/curvature bakes all need the same
-input: a lightmap-quality UV set.
+Be a drop-in replacement for every use Godot makes of xatlas, and better than
+xatlas where Godot's users run into problems with it. Godot calls xatlas in one
+place, `xatlas_mesh_lightmap_unwrap_callback` in `modules/xatlas_unwrap`
+(installed as `array_mesh_lightmap_unwrap_callback`). It is behind
+`ArrayMesh.lightmap_unwrap`, the scene and OBJ importers' "Static Lightmaps"
+option (with an `.unwrap_cache` keyed by an MD5 of the input), and GridMap
+baking. Per call it unwraps one mesh (all surfaces merged) and passes:
+
+- positions with the base transform's scale already applied, normals,
+  `u32` indices;
+- `fixWinding = true`, `padding = 1`, `maxChartSize = 4094`,
+  `blockAlign = true`, `texelsPerUnit = 1 / texel_size` (fixed density, a
+  single page that grows to fit);
+- and reads back `xref`, UVs normalized to the page, and the page size as a
+  size hint, which LightmapGI uses to allocate that mesh's lightmap.
+
+Known Godot problems with xatlas, which this crate should not have:
+[#117752](https://github.com/godotengine/godot/issues/117752) (output differs
+across platforms, so a lightmap baked on one machine misaligns on another),
+[#92119](https://github.com/godotengine/godot/issues/92119) (deadlock in
+xatlas's task scheduler after many unwraps),
+[proposal #12464](https://github.com/godotengine/godot-proposals/issues/12464)
+(wants global, bilinear-aware lightmap packing across meshes). Unwrap time on
+large imports matters too: xatlas takes 13–14 s on bunny or armadillo.
 
 What that means for the crate (✅ done, ◐ partial, ☐ missing):
 
 1. ✅ **Bake-quality UVs.** No overlaps or flips, every face inside [0,1],
-   padding in texels at the target resolution, low area distortion, uniform
-   texel density.
-2. ✅ **Seam splitting a renderer can apply.** Output vertices carry `xref` to
-   the *input* vertex, so callers can remap every other attribute (normals,
-   tangents, UV_0, colors, joints/weights, custom attributes) and keep the
-   existing hard edges and UV_0 seams.
-3. ◐ **Multi-mesh atlases.** `generate` packs many meshes into shared pages
-   (xatlas `AddMesh`), with a per-mesh `scale` for consistent density across
-   scaled instances. Missing: keeping each mesh on one page (a Bevy mesh
-   takes one lightmap image) and output that maps directly onto
-   `Lightmap::uv_rect`.
-4. ✅ **Respect authored structure.** Edges where the input splits vertices
-   (hard edges, UV_0 seams) are chart boundaries, which covers xatlas's
-   normal/texture seam weights without passing normals or UVs. Also
-   `face_materials` (charts never cross) and `face_ignore`.
-5. ✅ **Runtime-friendly.** Fast, no global state, `Send`, zero dependencies
-   and single-threaded under `--no-default-features` for wasm. ☐ Progress
-   reporting and cancellation for large meshes (xatlas `ProgressCallback`), so
-   jobs run cleanly on Bevy's `AsyncComputeTaskPool`.
-6. ◐ **Robust on real assets.** Degenerate faces, triangle soup and
-   non-manifold input must never panic and must still receive valid UVs. Keep
-   adding real-world models to the tests.
-7. ☐ **Repack existing UVs** (xatlas `AddUvMesh`): pack authored UV charts
-   into an atlas without re-segmenting, for example to combine several meshes'
-   UV_0 into one lightmap.
-8. ☐ **Packing extras that bakers use:** maximum chart size, 4×4 block
-   alignment for BC-compressed lightmaps, and an optional chart-ID / coverage
-   raster for bake dilation (xatlas `createImage`).
-9. ☐ **Bevy integration crate** (kept separate so this crate stays
-   engine-agnostic): `Mesh` → `Mesh` with UV_1 (or UV_0) and every attribute
-   remapped, `u16`/`u32` indices, tangents regenerated when present, `Lightmap`
-   `uv_rect` helpers for shared atlases, and use from an asset processor for
-   build-time unwrapping.
+   padding in texels, low area distortion, uniform texel density.
+2. ✅ **Fixed density, one growing page, size reported.** `texels_per_unit:
+   Some(1 / texel_size)` with `resolution: 0`; `Atlas::{width, height}` is
+   the size hint.
+3. ✅ **Seam splitting a caller can apply.** Output vertices carry `xref` to
+   the input vertex, as Godot's `SurfaceTool` rebuild expects.
+4. ✅ **Normals as seam hints.** Godot passes normals so hard edges become
+   seams. Here, edges where the input splits vertices are chart boundaries,
+   which covers that (and UV seams, and surface boundaries) without the
+   normals. Also `face_materials` and `face_ignore`.
+5. ☐ **Maximum chart size** (`maxChartSize`): charts bigger than a limit are
+   scaled down rather than growing the page or failing.
+6. ☐ **Block alignment** (`blockAlign`): place charts on a 4×4 texel grid for
+   block-compressed lightmaps.
+7. ◐ **Inconsistent winding** (`fixWinding`): flipped faces are currently cut
+   off as separate charts rather than fixed.
+8. ☐ **Determinism.** Same input gives the same output bit for bit, for any
+   thread count and ideally across platforms (x86/ARM, with and without
+   SIMD), so unwrap caches and baked lightmaps stay valid (#117752). At the
+   least, guarantee it per platform, test it, and document the limits.
+9. ✅ **No global state or scheduler** (#92119): rayon only, safe to call any
+   number of times from any thread. Keep it that way.
+10. ◐ **Robust on real assets.** Degenerate faces, triangle soup and
+    non-manifold input must never panic and must still receive valid UVs.
+11. ☐ **C API** for embedding in C++ engines: a separate crate producing a
+    static library and header that maps directly onto Godot's callback
+    signature, plus a Godot module that installs it. Godot core doesn't take
+    Rust dependencies, so this targets custom engine builds first.
+12. ☐ **Beyond xatlas, for Godot's open requests:** multi-mesh global packing
+    (`generate` already packs many meshes into shared pages; LightmapGI would
+    need per-mesh placement output), progress reporting and cancellation, and
+    repacking existing UVs (xatlas `AddUvMesh`).
 
 Non-goals: lighting bakes themselves, matching xatlas output exactly, quad or
-polygon output, and interactive UV editing.
+polygon output, interactive UV editing, and engine-specific integrations other
+than the Godot path above (Bevy included, for now).
 
-Maintainer constraint: keep the crate focused and publishable. Engine-specific
-code belongs in the integration crate, and new features need a concrete
-Bevy or baking use case.
+Maintainer constraint: keep the crate focused and publishable. Engine glue
+belongs in separate crates, and new features need a concrete Godot or baking
+use case.
 
 ## Layout
 
@@ -151,6 +166,11 @@ machine is often loaded, so multi-core timings are noisy.
 
 ## Next steps (priority order)
 
-1. Optional `glam` feature; a separate small Bevy integration crate.
-2. CI (tests in both feature configs, wasm32 build), then publish 0.1 to crates.io.
-3. Refresh `docs/atlases.png` (still shows the old rect-packed atlases).
+1. Determinism: test identical output across thread counts and runs; find
+   platform-dependent math (libm trig, faer SIMD paths) and decide what to
+   guarantee.
+2. Godot parity: maximum chart size, 4×4 block alignment, winding fixing.
+3. C API crate + Godot module implementing `array_mesh_lightmap_unwrap_callback`;
+   compare against xatlas on Godot's demo scenes.
+4. CI (tests in both feature configs, wasm32 build), then publish 0.1 to crates.io.
+5. Refresh `docs/atlases.png` (still shows the old rect-packed atlases).

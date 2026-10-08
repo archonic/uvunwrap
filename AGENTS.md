@@ -91,9 +91,14 @@ use case.
   `MeshInput::new` plus optional `face_materials`/`ignored_faces`/`scale`/
   `instance_scales`/`existing_uvs`, `Options` with `Density::{Auto, Fixed}`,
   `Atlas`, `OutputMesh`, `OutputVertex` (`page: Option`), `InstanceRect`,
-  `Error` naming the offending option/array/instance) and output assembly (seam vertex duplication,
-  `xref` back to input vertices, degenerate/ignored faces collapsed onto one
-  existing UV).
+  `Error` naming the offending option/array/instance). `run` is validate →
+  `unwrap_meshes` (segment + parameterize, meshes in parallel) →
+  `pack_meshes` (each mesh's `Slot`: `Direct` or `Tiled`) → `assemble_mesh`
+  per mesh in parallel (`place_chart`, `instance_rects`, `split_seams`: seam
+  vertex duplication, `xref` back to input vertices, degenerate/ignored faces
+  collapsed onto one existing UV).
+- `src/par.rs`: the only place that switches on the `parallel` feature
+  (`map`, `map_ref`, `flat_map`, `join`; order-preserving).
 - `src/geom.rs`: f64 vector helpers, convex hull, min-area rectangle, triangle
   overlap, and deterministic `cos`/`angle` (no platform math anywhere).
 - `src/topology.rs`: welding by exact position (scaled by `MeshInput::scale`),
@@ -112,9 +117,10 @@ use case.
   split chart in two (graph-distance Voronoi, seeded at the overlapping pair
   when validation found an overlap) and retry, halves in parallel.
   Charts ≥ 1000 faces with |total curvature| > 3 rad are split without
-  solving. Finalize: scale to 3D area, rotate to min-area rect.
-  `from_islands` keeps input UV islands (validated with unbounded distortion,
-  mirrored ones flipped) and falls back to the normal path per island.
+  solving. Finalize: scale to 3D area, rotate to min-area rect. With input
+  UVs, `parameterize` keeps each island (validated with unbounded
+  distortion, mirrored ones flipped) and falls back to the normal path per
+  island.
 - `src/progress.rs`: `Stage`, `Progress`, and `Ctx` (callback behind a mutex
   so reports are serialized and monotonic, plus an `AtomicBool` that
   parameterization polls; `QUIET` for nested packing).
@@ -124,16 +130,21 @@ use case.
 - `src/mask.rs`: conservative chart rasterization + padding dilation into
   per-row span masks (4 rotations derived exactly), and the page bitset with
   per-row free runs used for exact bottom-left placement search.
-- `src/pack.rs`: `Packing::Shape` (masks, default) or `Packing::Rect`
-  (skyline); auto density (bisection to fit one page, seeded by the rect
-  result, cropped to used height), fixed density (single growing page or
-  multiple fixed pages; the growing page tries 7 widths in parallel on one
-  set of masks and keeps the smallest area). Per-chart density (`chart_density`) applies
-  `max_chart_size`; `block_align` packs in 4×4 block units (`Mask::downsample`,
-  rects rounded up) and scales placements back to texels. Instanced meshes
-  are `TileSpec`s: each trial lays out the tile's charts (a sub-`pack` at the
-  smallest instance's density) and adds one unrotatable rectangle per
-  instance (`Mask::rect`) to the items being packed.
+- `src/pack.rs`: `prepare` (sizes and tile layouts, then `rasterize` masks
+  only once sizes pass the page and texel-budget checks), `place` (shape or
+  rect), and one function per mode: `pack_auto` (bisection to fit one page,
+  seeded by the rect result with at most 8 back-off steps, cropped to used
+  height, multi-page fallback), `pack_unbounded` (fixed density, 7 widths in
+  parallel on one set of masks, smallest area), `pack_pages` (fixed density,
+  fixed pages). Per-chart density (`chart_density`) applies
+  `max_chart_size`; `block_align` packs in 4×4 block units
+  (`Mask::downsample`, rects rounded up) and scales placements back.
+- `src/skyline.rs`: rectangle packer (`pack_rects`) for `Packing::Rect` and
+  the auto-mode lower bound.
+- `src/tile.rs`: instanced meshes: `layout_tile` packs a tile's charts once
+  (`pack_unbounded` at the smallest instance's density, capped so the
+  largest instance fits the page); each instance becomes one unrotatable
+  rectangle (`Mask::rect`) among the packed items.
 - `tests/`: `common/mod.rs` holds generators and `check`, which verifies
   every output guarantee (topology, positive UV area, no overlaps, 2×padding
   between charts and instances, padding to page edges, ignored faces
@@ -216,9 +227,13 @@ a slowdown is real, compare both builds with
 
 ## Next steps (priority order)
 
-1. Internals: split `run` and `pack` into per-step/per-mode functions,
-   parallelize across meshes, remove duplication (parallel/serial helper,
-   bounding boxes, `round_up`).
+1. Shape packing on large pages: 300 small tori (2485 charts, 138K
+   triangles) take 1.5 s at a 1024 page, 8.2 s at 2048, 20.7 s at 4096
+   (rect packing: 31 ms; segmentation + parameterization: 39 ms). Packing is
+   ~18 bisection trials, each rasterizing and placing every chart. Ideas:
+   pack at reduced resolution first and refine, fewer trials (better
+   bounds from the first successful layout), reuse masks across nearby
+   densities, faster `Page::find` row skipping.
 2. Packaging and CI: `repository`/`documentation` metadata, `include` list,
    absolute README image URL; CI with tests in both feature configs, `cargo
    fmt --check`, clippy `-D warnings`, a wasm32 build, and example output

@@ -411,18 +411,22 @@ fn pack_auto(p: &Packer<'_>, size: u32) -> Result<PackResult, Error> {
             _ => 0.0,
         };
         hi = (full / p.area()).sqrt();
-        while lo > 0.0 {
+        // Greedy placement isn't monotone in density, so shapes can fail
+        // where rectangles fit: back off a little a few times, then leave it
+        // to the bisection.
+        for _ in 0..8 {
+            if !(lo > 0.0) {
+                break;
+            }
             p.ctx.advance(Stage::Packing, 1, None)?;
-            match fits(lo)? {
-                Some(fit) => {
-                    best = Some(fit);
-                    break;
-                }
-                None => lo *= 0.95,
+            if let Some(fit) = fits(lo)? {
+                best = Some(fit);
+                break;
             }
-            if lo < hi * 1e-3 {
-                lo = 0.0;
-            }
+            lo *= 0.95;
+        }
+        if best.is_none() {
+            lo = 0.0;
         }
     }
     // Bisect until within 0.25%.

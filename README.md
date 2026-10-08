@@ -91,7 +91,9 @@ is true surface area over atlas area.
 - **Determinism**: identical output across thread counts and platforms, so
   unwrap caches and baked lightmaps stay valid.
 - **xatlas parity**: maximum chart size, 4×4 block alignment, winding fixes.
-- **C API** and a Godot module implementing its lightmap unwrap callback.
+- **Multi-mesh**: one page per mesh, per-mesh bounds; progress and
+  cancellation; repacking existing UVs.
+- **Integrations** (after the above): a Bevy crate.
 
 ## License
 

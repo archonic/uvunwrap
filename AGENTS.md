@@ -246,12 +246,47 @@ a slowdown is real, compare both builds with
 
 ## Next steps (priority order)
 
+### 0.1
+
 1. Packaging and CI: `repository`/`documentation` metadata, `include` list,
    absolute README image URL; CI with tests in both feature configs, `cargo
    fmt --check`, clippy `-D warnings`, a wasm32 build, and example output
    hashes compared across x86-64/ARM/wasm32 without `direct-solver`. Then
    publish 0.1.
-2. Deterministic direct solver (own sparse Cholesky), if cross-platform
+
+### 0.2
+
+2. Replace `Packing::Rect` (rectangle skyline) with a TABI-style
+   fold-and-push packer, so there are still exactly two packers: `Shape`
+   (exhaustive raster search, best quality, default) and the new fast one.
+   Reference: Gu, Vining & Sheffer, "TABI: Tight and Balanced Interactive
+   Atlas Packing", arXiv 2602.07782 (2026), Sec. 3–4 and Algorithms 1–4.
+   Their GPU version averages ~5 ms vs ~2.3 s for xatlas (random) at mean
+   L2 stretch 2.16 vs 1.89–2.00; on UV-unwrapped models often equal to
+   xatlas. Plan, CPU-only:
+   - Sort charts by height (bounding boxes rotated taller than wide), fold
+     into rows of page width, push each row up against a frontline (per
+     column, the lowest filled texel).
+   - Use exact per-column top/bottom profiles and per-row left/right
+     profiles read off our existing padded masks (TABI approximates them
+     with sliced AABBs + OBBs because it never rasterizes).
+   - Compact neighbours horizontally within a row using left/right
+     profiles; push charts using top profiles and write bottom profiles
+     into the frontline; correct offsets where a pushed chart could
+     intersect its compacted neighbour (Alg. 1).
+   - Balance: per row, try left/right direction × full width / fold into
+     a knee concavity × with/without horizontal compacting; keep the
+     configuration with the lowest maximum frontline (knee: height jump
+     ≥ 10% of page height and ≥ 20% of the taller chart).
+   - Keep our density search (bisection; TABI tests 64 discrete scales),
+     padding, block alignment, instances and multi-page support.
+   - No reflection (TABI mirrors charts; that would flip UV winding, which
+     we guarantee). Rotations by multiples of 90° only.
+   - Known limitation: a frontline can't nest charts into enclosed holes
+     or deep side concavities (torus rings), which `Shape` can.
+   Evaluate against `Shape` on the benchmark models and the 300-torus scene
+   (1024/2048/4096 pages): utilization (treat differences under ~3 points
+   as noise) and time. Target: milliseconds for thousands of charts.
+3. Deterministic direct solver (own sparse Cholesky), if cross-platform
    determinism must hold with the fast path.
-3. Bevy integration crate.
-4. (Deferred) shape packing speed on large scenes; see the tuning notes.
+4. Bevy integration crate.

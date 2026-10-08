@@ -126,8 +126,10 @@ Pre-release (0.1 not yet published). Unwrapping, packing, instances, UV
 repacking, progress/cancellation and per-thread-count determinism are in
 place and tested; the API may still change before 0.1.
 
-- **API polish** before 0.1: an explicit auto/fixed density mode, more
-  specific errors, clearer names.
+- **0.2: a fast packer.** Replace `Packing::Rect` with a fold-and-push
+  packer after TABI (Gu, Vining & Sheffer 2026) that pushes charts by their
+  actual outlines: near-`Shape` quality in milliseconds for thousands of
+  charts.
 - **Determinism** across CPU architectures with the fast direct solver too,
   and CI comparing output hashes across architectures.
 - **Integrations** (after 0.1): a Bevy crate.

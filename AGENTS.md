@@ -155,6 +155,8 @@ use case.
 
 ## Conventions
 
+- Run `cargo fmt` (default settings, no `rustfmt.toml`) before every commit;
+  `cargo fmt --check` must pass.
 - `#![forbid(unsafe_code)]`, `#![warn(missing_docs)]`.
 - Zero dependencies with `--no-default-features`; must stay wasm-friendly.
 - Never commit downloaded models or `out/`.

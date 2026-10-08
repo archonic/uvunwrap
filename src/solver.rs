@@ -11,7 +11,12 @@ pub(crate) struct SparseRows {
 
 impl SparseRows {
     pub fn new(ncols: usize) -> Self {
-        SparseRows { row_ptr: vec![0], cols: Vec::new(), vals: Vec::new(), ncols }
+        SparseRows {
+            row_ptr: vec![0],
+            cols: Vec::new(),
+            vals: Vec::new(),
+            ncols,
+        }
     }
 
     pub fn push(&mut self, col: usize, val: f64) {
@@ -31,7 +36,11 @@ impl SparseRows {
     fn mul(&self, x: &[f64], out: &mut [f64]) {
         for (r, o) in out.iter_mut().enumerate() {
             let (s, e) = (self.row_ptr[r], self.row_ptr[r + 1]);
-            *o = self.cols[s..e].iter().zip(&self.vals[s..e]).map(|(&c, &v)| v * x[c as usize]).sum();
+            *o = self.cols[s..e]
+                .iter()
+                .zip(&self.vals[s..e])
+                .map(|(&c, &v)| v * x[c as usize])
+                .sum();
         }
     }
 
@@ -63,14 +72,17 @@ pub(crate) fn least_squares(a: &mut SparseRows, b: &[f64], x: &mut [f64]) {
 #[cfg(feature = "direct-solver")]
 fn cholesky(a: &SparseRows, b: &[f64], x: &mut [f64]) -> bool {
     use faer::dyn_stack::{MemBuffer, MemStack};
-    use faer::sparse::linalg::cholesky::{factorize_symbolic_cholesky, CholeskySymbolicParams, SymmetricOrdering};
+    use faer::sparse::linalg::cholesky::{
+        factorize_symbolic_cholesky, CholeskySymbolicParams, SymmetricOrdering,
+    };
     use faer::sparse::linalg::SupernodalThreshold;
     use faer::sparse::{SparseColMat, SymbolicSparseColMat};
     use faer::{Conj, MatMut, Par, Side};
 
     let (lower, mut atb) = normal_equations(a, b);
     let n = a.ncols;
-    let symbolic = SymbolicSparseColMat::<usize>::new_checked(n, n, lower.col_ptr, None, lower.row_idx);
+    let symbolic =
+        SymbolicSparseColMat::<usize>::new_checked(n, n, lower.col_ptr, None, lower.row_idx);
     let m = SparseColMat::<usize, f64>::new(symbolic, lower.vals);
     // Supernodal is faster than simplicial on LSCM systems of every size we
     // see, including small ones, so don't let faer choose.
@@ -78,18 +90,34 @@ fn cholesky(a: &SparseRows, b: &[f64], x: &mut [f64]) -> bool {
         supernodal_flop_ratio_threshold: SupernodalThreshold::FORCE_SUPERNODAL,
         ..Default::default()
     };
-    let Ok(sym) = factorize_symbolic_cholesky(m.symbolic(), Side::Lower, SymmetricOrdering::Amd, params) else {
+    let Ok(sym) =
+        factorize_symbolic_cholesky(m.symbolic(), Side::Lower, SymmetricOrdering::Amd, params)
+    else {
         return false;
     };
     let par = Par::Seq;
     let mut values = vec![0.0; sym.len_val()];
-    let scratch = sym.factorize_numeric_llt_scratch::<f64>(par, Default::default()).or(sym.solve_in_place_scratch::<f64>(1, par));
+    let scratch = sym
+        .factorize_numeric_llt_scratch::<f64>(par, Default::default())
+        .or(sym.solve_in_place_scratch::<f64>(1, par));
     let mut buf = MemBuffer::new(scratch);
-    let Ok(llt) = sym.factorize_numeric_llt(&mut values, m.as_ref(), Side::Lower, Default::default(), par, MemStack::new(&mut buf), Default::default())
-    else {
+    let Ok(llt) = sym.factorize_numeric_llt(
+        &mut values,
+        m.as_ref(),
+        Side::Lower,
+        Default::default(),
+        par,
+        MemStack::new(&mut buf),
+        Default::default(),
+    ) else {
         return false;
     };
-    llt.solve_in_place_with_conj(Conj::No, MatMut::from_column_major_slice_mut(&mut atb, n, 1), par, MemStack::new(&mut buf));
+    llt.solve_in_place_with_conj(
+        Conj::No,
+        MatMut::from_column_major_slice_mut(&mut atb, n, 1),
+        par,
+        MemStack::new(&mut buf),
+    );
     if atb.iter().any(|v| !v.is_finite()) {
         return false;
     }
@@ -133,7 +161,11 @@ pub(crate) fn normal_equations(a: &SparseRows, b: &[f64]) -> (LowerCsc, Vec<f64>
         }
     }
 
-    let mut out = LowerCsc { col_ptr: Vec::with_capacity(n + 1), row_idx: Vec::new(), vals: Vec::new() };
+    let mut out = LowerCsc {
+        col_ptr: Vec::with_capacity(n + 1),
+        row_idx: Vec::new(),
+        vals: Vec::new(),
+    };
     out.col_ptr.push(0);
     let mut acc = vec![0.0; n];
     let mut seen = vec![usize::MAX; n];
@@ -172,12 +204,19 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 /// Minimizes `|A x - b|²` starting from `x`, with Jacobi (column-norm)
 /// preconditioning: solves for `y = D x` on `A D⁻¹`, then maps back. Returns
 /// the number of iterations used.
-pub(crate) fn cgls(a: &mut SparseRows, b: &[f64], x: &mut [f64], max_iter: usize, tol: f64) -> usize {
+pub(crate) fn cgls(
+    a: &mut SparseRows,
+    b: &[f64],
+    x: &mut [f64],
+    max_iter: usize,
+    tol: f64,
+) -> usize {
     let mut norm = vec![0.0; a.ncols];
     for (&c, &v) in a.cols.iter().zip(&a.vals) {
         norm[c as usize] += v * v;
     }
-    norm.iter_mut().for_each(|n| *n = if *n > 0.0 { n.sqrt() } else { 1.0 });
+    norm.iter_mut()
+        .for_each(|n| *n = if *n > 0.0 { n.sqrt() } else { 1.0 });
     for (&c, v) in a.cols.iter().zip(a.vals.iter_mut()) {
         *v /= norm[c as usize];
     }
@@ -215,7 +254,9 @@ fn cgls_raw(a: &SparseRows, b: &[f64], x: &mut [f64], max_iter: usize, tol: f64)
         a.mul_t(&r, &mut s);
         let gamma_new = dot(&s, &s);
         let beta = gamma_new / gamma;
-        p.iter_mut().zip(&s).for_each(|(pi, si)| *pi = si + beta * *pi);
+        p.iter_mut()
+            .zip(&s)
+            .for_each(|(pi, si)| *pi = si + beta * *pi);
         gamma = gamma_new;
     }
     max_iter
@@ -228,7 +269,12 @@ mod tests {
     #[test]
     fn normal_equations_match_dense() {
         // A = [[1, 2, 0], [0, 3, 4], [5, 0, 6], [0, 7, 0]], b = [1, 2, 3, 4]
-        let rows: [&[(usize, f64)]; 4] = [&[(0, 1.0), (1, 2.0)], &[(1, 3.0), (2, 4.0)], &[(0, 5.0), (2, 6.0)], &[(1, 7.0)]];
+        let rows: [&[(usize, f64)]; 4] = [
+            &[(0, 1.0), (1, 2.0)],
+            &[(1, 3.0), (2, 4.0)],
+            &[(0, 5.0), (2, 6.0)],
+            &[(1, 7.0)],
+        ];
         let mut a = SparseRows::new(3);
         for row in rows {
             for &(c, v) in row {
@@ -239,14 +285,21 @@ mod tests {
         let b = [1.0, 2.0, 3.0, 4.0];
         let (lower, atb) = normal_equations(&a, &b);
         let dense = |i: usize, j: usize| -> f64 {
-            rows.iter().map(|r| {
-                let get = |c| r.iter().find(|e| e.0 == c).map_or(0.0, |e| e.1);
-                get(i) * get(j)
-            }).sum()
+            rows.iter()
+                .map(|r| {
+                    let get = |c| r.iter().find(|e| e.0 == c).map_or(0.0, |e| e.1);
+                    get(i) * get(j)
+                })
+                .sum()
         };
         for j in 0..3 {
-            let col: Vec<(usize, f64)> = (lower.col_ptr[j]..lower.col_ptr[j + 1]).map(|k| (lower.row_idx[k], lower.vals[k])).collect();
-            let expect: Vec<(usize, f64)> = (j..3).map(|i| (i, dense(i, j))).filter(|e| e.1 != 0.0).collect();
+            let col: Vec<(usize, f64)> = (lower.col_ptr[j]..lower.col_ptr[j + 1])
+                .map(|k| (lower.row_idx[k], lower.vals[k]))
+                .collect();
+            let expect: Vec<(usize, f64)> = (j..3)
+                .map(|i| (i, dense(i, j)))
+                .filter(|e| e.1 != 0.0)
+                .collect();
             assert_eq!(col, expect, "column {j}");
         }
         assert_eq!(atb, vec![16.0, 36.0, 26.0]);
@@ -256,7 +309,11 @@ mod tests {
     fn solves_overdetermined_system() {
         // x + y = 3, x - y = 1, 2x = 4  ->  x = 2, y = 1
         let mut a = SparseRows::new(2);
-        for row in [[(0, 1.0), (1, 1.0)], [(0, 1.0), (1, -1.0)], [(0, 2.0), (1, 0.0)]] {
+        for row in [
+            [(0, 1.0), (1, 1.0)],
+            [(0, 1.0), (1, -1.0)],
+            [(0, 2.0), (1, 0.0)],
+        ] {
             for (c, v) in row {
                 a.push(c, v);
             }

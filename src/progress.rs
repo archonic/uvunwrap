@@ -42,13 +42,19 @@ pub(crate) struct Ctx<'a> {
 
 impl<'a> Ctx<'a> {
     pub const fn new(callback: Option<&'a (dyn Fn(Progress) -> bool + Sync)>) -> Self {
-        Ctx { callback, count: Mutex::new((Stage::Segmenting, 0)), cancelled: AtomicBool::new(false) }
+        Ctx {
+            callback,
+            count: Mutex::new((Stage::Segmenting, 0)),
+            cancelled: AtomicBool::new(false),
+        }
     }
 
     /// Adds `by` units to `stage` (resetting the count when the stage changes)
     /// and reports. Calls are serialized, so counts never go backwards.
     pub fn advance(&self, stage: Stage, by: usize, total: usize) -> Result<(), Error> {
-        let Some(callback) = self.callback else { return Ok(()) };
+        let Some(callback) = self.callback else {
+            return Ok(());
+        };
         let mut count = self.count.lock().unwrap_or_else(|e| e.into_inner());
         // Checked under the lock, so nothing is reported after a cancellation.
         if self.is_cancelled() {
@@ -58,7 +64,11 @@ impl<'a> Ctx<'a> {
             *count = (stage, 0);
         }
         count.1 += by;
-        if callback(Progress { stage, done: count.1, total }) {
+        if callback(Progress {
+            stage,
+            done: count.1,
+            total,
+        }) {
             Ok(())
         } else {
             self.cancelled.store(true, Ordering::Relaxed);

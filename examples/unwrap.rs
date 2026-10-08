@@ -55,7 +55,9 @@ fn load_obj(text: &str) -> Obj {
                             }
                         }
                         let p = *v.get(usize::try_from(key[0]).ok()?)?;
-                        let uv = usize::try_from(key[1]).ok().and_then(|i| vt.get(i).copied());
+                        let uv = usize::try_from(key[1])
+                            .ok()
+                            .and_then(|i| vt.get(i).copied());
                         Some(*corners.entry(key).or_insert_with(|| {
                             positions.push(p);
                             uvs.push(uv);
@@ -70,13 +72,19 @@ fn load_obj(text: &str) -> Obj {
             _ => {}
         }
     }
-    let uvs = uvs.into_iter().collect::<Option<Vec<_>>>().filter(|u| !u.is_empty());
+    let uvs = uvs
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .filter(|u| !u.is_empty());
     (positions, indices, uvs)
 }
 
 /// Gives every triangle its own three vertices.
 fn flatten(positions: &[[f32; 3]], indices: &[u32]) -> (Vec<[f32; 3]>, Vec<u32>) {
-    (indices.iter().map(|&i| positions[i as usize]).collect(), (0..indices.len() as u32).collect())
+    (
+        indices.iter().map(|&i| positions[i as usize]).collect(),
+        (0..indices.len() as u32).collect(),
+    )
 }
 
 fn torus() -> (Vec<[f32; 3]>, Vec<u32>) {
@@ -84,7 +92,10 @@ fn torus() -> (Vec<[f32; 3]>, Vec<u32>) {
     let mut positions = Vec::new();
     for j in 0..nv {
         for i in 0..nu {
-            let (a, b) = (i as f32 / nu as f32 * std::f32::consts::TAU, j as f32 / nv as f32 * std::f32::consts::TAU);
+            let (a, b) = (
+                i as f32 / nu as f32 * std::f32::consts::TAU,
+                j as f32 / nv as f32 * std::f32::consts::TAU,
+            );
             let r = 1.0 + 0.4 * b.cos();
             positions.push([r * a.cos(), r * a.sin(), 0.4 * b.sin()]);
         }
@@ -93,7 +104,14 @@ fn torus() -> (Vec<[f32; 3]>, Vec<u32>) {
     let mut indices = Vec::new();
     for j in 0..nv {
         for i in 0..nu {
-            indices.extend([id(i, j), id(i + 1, j), id(i + 1, j + 1), id(i, j), id(i + 1, j + 1), id(i, j + 1)]);
+            indices.extend([
+                id(i, j),
+                id(i + 1, j),
+                id(i + 1, j + 1),
+                id(i, j),
+                id(i + 1, j + 1),
+                id(i, j + 1),
+            ]);
         }
     }
     (positions, indices)
@@ -106,9 +124,21 @@ fn main() {
         opts.packing = uvunwrap::Packing::Rect;
         args.remove(i);
     }
-    let flat = args.iter().position(|a| a == "--flat").map(|i| args.remove(i)).is_some();
-    let keep_uvs = args.iter().position(|a| a == "--keep-uvs").map(|i| args.remove(i)).is_some();
-    opts.block_align = args.iter().position(|a| a == "--block-align").map(|i| args.remove(i)).is_some();
+    let flat = args
+        .iter()
+        .position(|a| a == "--flat")
+        .map(|i| args.remove(i))
+        .is_some();
+    let keep_uvs = args
+        .iter()
+        .position(|a| a == "--keep-uvs")
+        .map(|i| args.remove(i))
+        .is_some();
+    opts.block_align = args
+        .iter()
+        .position(|a| a == "--block-align")
+        .map(|i| args.remove(i))
+        .is_some();
     let mut value = |name: &str| {
         let i = args.iter().position(|a| a == name)?;
         args.remove(i);
@@ -121,7 +151,13 @@ fn main() {
     if let Some(v) = value("--max-chart-size") {
         opts.max_chart_size = v.parse().expect("--max-chart-size");
     }
-    let instances: Vec<f32> = value("--instances").map(|v| v.split(',').map(|k| k.parse().expect("--instances")).collect()).unwrap_or_default();
+    let instances: Vec<f32> = value("--instances")
+        .map(|v| {
+            v.split(',')
+                .map(|k| k.parse().expect("--instances"))
+                .collect()
+        })
+        .unwrap_or_default();
     if let Some(v) = value("--resolution") {
         opts.resolution = v.parse().expect("--resolution");
     }
@@ -131,7 +167,10 @@ fn main() {
     let (positions, indices, uvs, prefix) = match args.first() {
         Some(path) => {
             let (p, i, uv) = load_obj(&fs::read_to_string(path).expect("read input"));
-            let prefix = args.get(1).cloned().unwrap_or_else(|| path.trim_end_matches(".obj").to_string() + "_unwrapped");
+            let prefix = args
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| path.trim_end_matches(".obj").to_string() + "_unwrapped");
             (p, i, uv, prefix)
         }
         None => {
@@ -141,11 +180,25 @@ fn main() {
         }
     };
 
-    let (positions, indices) = if flat { flatten(&positions, &indices) } else { (positions, indices) };
-    let uvs = if keep_uvs && !flat { Some(uvs.expect("--keep-uvs: the OBJ has no vt for every vertex")) } else { None };
+    let (positions, indices) = if flat {
+        flatten(&positions, &indices)
+    } else {
+        (positions, indices)
+    };
+    let uvs = if keep_uvs && !flat {
+        Some(uvs.expect("--keep-uvs: the OBJ has no vt for every vertex"))
+    } else {
+        None
+    };
 
     let start = Instant::now();
-    let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices, instances: &instances, uvs: uvs.as_deref(), ..Default::default() };
+    let mesh = uvunwrap::MeshInput {
+        positions: &positions,
+        indices: &indices,
+        instances: &instances,
+        uvs: uvs.as_deref(),
+        ..Default::default()
+    };
     let atlas = uvunwrap::generate(&[mesh], &opts).expect("unwrap failed");
     let elapsed = start.elapsed();
     let out = &atlas.meshes[0];
@@ -170,10 +223,20 @@ fn main() {
         }
     };
     for v in &out.vertices {
-        [v.xref, v.uv[0].to_bits(), v.uv[1].to_bits(), v.chart.unwrap_or(u32::MAX), v.page].into_iter().for_each(&mut feed);
+        [
+            v.xref,
+            v.uv[0].to_bits(),
+            v.uv[1].to_bits(),
+            v.chart.unwrap_or(u32::MAX),
+            v.page,
+        ]
+        .into_iter()
+        .for_each(&mut feed);
     }
     out.indices.iter().for_each(|&i| feed(i));
-    [atlas.width, atlas.height, atlas.texels_per_unit.to_bits()].into_iter().for_each(&mut feed);
+    [atlas.width, atlas.height, atlas.texels_per_unit.to_bits()]
+        .into_iter()
+        .for_each(&mut feed);
     println!("output hash {hash:016x}");
 
     let mut obj = String::new();
@@ -198,8 +261,11 @@ fn main() {
              <rect width='100%' height='100%' fill='#1b1b1f'/>"
         );
         // Draw the mesh once, or once per instance rectangle.
-        let views: Vec<Option<uvunwrap::InstanceRect>> =
-            if out.instances.is_empty() { vec![None] } else { out.instances.iter().copied().map(Some).collect() };
+        let views: Vec<Option<uvunwrap::InstanceRect>> = if out.instances.is_empty() {
+            vec![None]
+        } else {
+            out.instances.iter().copied().map(Some).collect()
+        };
         for view in views {
             for t in out.indices.chunks_exact(3) {
                 let vs = [0, 1, 2].map(|k| out.vertices[t[k] as usize]);
@@ -217,7 +283,11 @@ fn main() {
                     .iter()
                     .map(|v| {
                         let p = uv(v.uv);
-                        format!("{:.2},{:.2}", p[0] * atlas.width as f32 * scale, p[1] * atlas.height as f32 * scale)
+                        format!(
+                            "{:.2},{:.2}",
+                            p[0] * atlas.width as f32 * scale,
+                            p[1] * atlas.height as f32 * scale
+                        )
                     })
                     .collect();
                 write!(svg, "<polygon points='{}' fill='hsl({hue:.0},65%,60%)' stroke='hsl({hue:.0},65%,35%)' stroke-width='0.3'/>", pts.join(" ")).unwrap();

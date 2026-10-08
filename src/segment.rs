@@ -47,7 +47,10 @@ impl PartialOrd for Candidate {
 impl Ord for Candidate {
     // Reversed so that `BinaryHeap` pops the lowest cost first.
     fn cmp(&self, other: &Self) -> Ordering {
-        other.cost.total_cmp(&self.cost).then(other.region.cmp(&self.region))
+        other
+            .cost
+            .total_cmp(&self.cost)
+            .then(other.region.cmp(&self.region))
     }
 }
 
@@ -73,7 +76,10 @@ struct Regions {
 
 fn edge_len(topo: &Topology, f: usize, e: usize) -> f64 {
     let face = topo.faces[f];
-    len3(sub3(topo.positions[face[(e + 1) % 3] as usize], topo.positions[face[e] as usize]))
+    len3(sub3(
+        topo.positions[face[(e + 1) % 3] as usize],
+        topo.positions[face[e] as usize],
+    ))
 }
 
 /// Face normals smoothed by a few rounds of area-weighted averaging with
@@ -93,7 +99,12 @@ fn smoothed_normals(topo: &Topology, rounds: usize) -> Vec<V3> {
             })
         })
         .collect();
-    let mut n: Vec<V3> = topo.normals.iter().zip(&topo.areas).map(|(&n, &a)| scale3(n, a)).collect();
+    let mut n: Vec<V3> = topo
+        .normals
+        .iter()
+        .zip(&topo.areas)
+        .map(|(&n, &a)| scale3(n, a))
+        .collect();
     for _ in 0..rounds {
         n = (0..n.len())
             .map(|f| {
@@ -107,7 +118,10 @@ fn smoothed_normals(topo: &Topology, rounds: usize) -> Vec<V3> {
             })
             .collect();
     }
-    n.iter().enumerate().map(|(f, &v)| normalize3(v).unwrap_or(topo.normals[f])).collect()
+    n.iter()
+        .enumerate()
+        .map(|(f, &v)| normalize3(v).unwrap_or(topo.normals[f]))
+        .collect()
 }
 
 /// Builds the planar regions of `subset` (faces outside it count as
@@ -136,7 +150,10 @@ fn build_regions(topo: &Topology, smooth: &[V3], subset: &[u32]) -> Regions {
         stack.push(seed as u32);
         while let Some(f) = stack.pop() {
             for &g in &topo.neighbors[f as usize] {
-                if g != NONE && of_face[g as usize] == PENDING && dot3(topo.normals[g as usize], n) >= COPLANAR {
+                if g != NONE
+                    && of_face[g as usize] == PENDING
+                    && dot3(topo.normals[g as usize], n) >= COPLANAR
+                {
                     of_face[g as usize] = id;
                     members.push(g);
                     stack.push(g);
@@ -166,7 +183,8 @@ fn build_regions(topo: &Topology, smooth: &[V3], subset: &[u32]) -> Regions {
                 let len = edge_len(topo, f, e);
                 perimeter[r] += len;
                 if other != NONE {
-                    let crease = len * (1.0 - dot3(topo.normals[f], topo.normals[g as usize])).max(0.0);
+                    let crease =
+                        len * (1.0 - dot3(topo.normals[f], topo.normals[g as usize])).max(0.0);
                     match links[r].iter_mut().find(|l| l.other == other) {
                         Some(l) => {
                             l.len += len;
@@ -179,7 +197,14 @@ fn build_regions(topo: &Topology, smooth: &[V3], subset: &[u32]) -> Regions {
         }
         normal[r] = normalize3(nsum).unwrap_or(topo.normals[members[0] as usize]);
     }
-    Regions { of_face, faces, normal, area, perimeter, links }
+    Regions {
+        of_face,
+        faces,
+        normal,
+        area,
+        perimeter,
+        links,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -196,7 +221,14 @@ impl ChartState {
 }
 
 /// Cost of adding region `r` to chart `c`, or `None` if it isn't allowed.
-fn cost(reg: &Regions, chart_of: &[u32], c: u32, st: &ChartState, r: usize, cos_max: f64) -> Option<f64> {
+fn cost(
+    reg: &Regions,
+    chart_of: &[u32],
+    c: u32,
+    st: &ChartState,
+    r: usize,
+    cos_max: f64,
+) -> Option<f64> {
     let d = dot3(reg.normal[r], st.normal());
     if d < cos_max {
         return None;
@@ -258,16 +290,27 @@ pub(crate) fn components(topo: &Topology) -> Vec<Vec<u32>> {
 /// face normals lie within `max_angle` radians of the chart's average normal.
 pub(crate) fn segment(topo: &Topology, max_angle: f64) -> Vec<Vec<u32>> {
     let smooth = smoothed_normals(topo, SMOOTHING_ROUNDS);
-    let all: Vec<u32> = (0..topo.faces.len() as u32).filter(|&f| !topo.excluded[f as usize]).collect();
+    let all: Vec<u32> = (0..topo.faces.len() as u32)
+        .filter(|&f| !topo.excluded[f as usize])
+        .collect();
     segment_regions(topo, &build_regions(topo, &smooth, &all), &all, max_angle)
 }
 
-fn segment_regions(topo: &Topology, reg: &Regions, subset: &[u32], max_angle: f64) -> Vec<Vec<u32>> {
+fn segment_regions(
+    topo: &Topology,
+    reg: &Regions,
+    subset: &[u32],
+    max_angle: f64,
+) -> Vec<Vec<u32>> {
     let cos_max = crate::geom::cos(max_angle);
     let nr = reg.faces.len();
     let mut chart_of = vec![NONE; nr];
     let mut order: Vec<u32> = (0..nr as u32).collect();
-    order.sort_by(|&a, &b| reg.area[b as usize].total_cmp(&reg.area[a as usize]).then(a.cmp(&b)));
+    order.sort_by(|&a, &b| {
+        reg.area[b as usize]
+            .total_cmp(&reg.area[a as usize])
+            .then(a.cmp(&b))
+    });
 
     let mut charts: Vec<Vec<u32>> = Vec::new();
     let mut states: Vec<ChartState> = Vec::new();
@@ -279,32 +322,50 @@ fn segment_regions(topo: &Topology, reg: &Regions, subset: &[u32], max_angle: f6
         let c = charts.len() as u32;
         let s = seed as usize;
         chart_of[s] = c;
-        let mut st = ChartState { nsum: scale3(reg.normal[s], reg.area[s]), area: reg.area[s], boundary: reg.perimeter[s] };
+        let mut st = ChartState {
+            nsum: scale3(reg.normal[s], reg.area[s]),
+            area: reg.area[s],
+            boundary: reg.perimeter[s],
+        };
         let mut members = vec![seed];
         heap.clear();
-        let push = |heap: &mut BinaryHeap<Candidate>, chart_of: &[u32], st: &ChartState, r: usize| {
-            for l in &reg.links[r] {
-                let o = l.other as usize;
-                if chart_of[o] == NONE {
-                    if let Some(cost) = cost(reg, chart_of, c, st, o, cos_max) {
-                        heap.push(Candidate { cost, region: o as u32 });
+        let push =
+            |heap: &mut BinaryHeap<Candidate>, chart_of: &[u32], st: &ChartState, r: usize| {
+                for l in &reg.links[r] {
+                    let o = l.other as usize;
+                    if chart_of[o] == NONE {
+                        if let Some(cost) = cost(reg, chart_of, c, st, o, cos_max) {
+                            heap.push(Candidate {
+                                cost,
+                                region: o as u32,
+                            });
+                        }
                     }
                 }
-            }
-        };
+            };
         push(&mut heap, &chart_of, &st, s);
-        while let Some(Candidate { cost: queued, region }) = heap.pop() {
+        while let Some(Candidate {
+            cost: queued,
+            region,
+        }) = heap.pop()
+        {
             let r = region as usize;
             if chart_of[r] != NONE {
                 continue;
             }
             // The chart changed since this was queued: re-evaluate lazily.
-            let Some(now) = cost(reg, &chart_of, c, &st, r, cos_max) else { continue };
+            let Some(now) = cost(reg, &chart_of, c, &st, r, cos_max) else {
+                continue;
+            };
             if now > queued + 1e-9 {
                 heap.push(Candidate { cost: now, region });
                 continue;
             }
-            let l_in: f64 = reg.links[r].iter().filter(|l| chart_of[l.other as usize] == c).map(|l| l.len).sum();
+            let l_in: f64 = reg.links[r]
+                .iter()
+                .filter(|l| chart_of[l.other as usize] == c)
+                .map(|l| l.len)
+                .sum();
             chart_of[r] = c;
             members.push(region);
             st.nsum = add3(st.nsum, scale3(reg.normal[r], reg.area[r]));
@@ -318,7 +379,17 @@ fn segment_regions(topo: &Topology, reg: &Regions, subset: &[u32], max_angle: f6
 
     merge_charts(reg, &mut chart_of, &mut charts, &mut states, cos_max);
 
-    let mut face_chart: Vec<u32> = reg.of_face.iter().map(|&r| if r == NONE { NONE } else { chart_of[r as usize] }).collect();
+    let mut face_chart: Vec<u32> = reg
+        .of_face
+        .iter()
+        .map(|&r| {
+            if r == NONE {
+                NONE
+            } else {
+                chart_of[r as usize]
+            }
+        })
+        .collect();
     smooth_boundaries(topo, reg, subset, &mut face_chart, &states, cos_max);
 
     let mut out: Vec<Vec<u32>> = vec![Vec::new(); charts.len()];
@@ -335,7 +406,14 @@ fn segment_regions(topo: &Topology, reg: &Regions, subset: &[u32], max_angle: f6
 /// Moves single-face teeth to the chart they stick into: a face with at most
 /// one edge neighbor in its own chart and at least two in another one. Such a
 /// face is a leaf of its chart, so moving it never disconnects the chart.
-fn smooth_boundaries(topo: &Topology, reg: &Regions, subset: &[u32], face_chart: &mut [u32], states: &[ChartState], cos_max: f64) {
+fn smooth_boundaries(
+    topo: &Topology,
+    reg: &Regions,
+    subset: &[u32],
+    face_chart: &mut [u32],
+    states: &[ChartState],
+    cos_max: f64,
+) {
     let normals: Vec<V3> = states.iter().map(|s| s.normal()).collect();
     for _ in 0..4 {
         let mut moved = false;
@@ -346,7 +424,13 @@ fn smooth_boundaries(topo: &Topology, reg: &Regions, subset: &[u32], face_chart:
             if own == NONE || reg.faces[r as usize].len() != 1 {
                 continue;
             }
-            let nb = topo.neighbors[f].map(|g| if g == NONE { NONE } else { face_chart[g as usize] });
+            let nb = topo.neighbors[f].map(|g| {
+                if g == NONE {
+                    NONE
+                } else {
+                    face_chart[g as usize]
+                }
+            });
             let own_count = nb.iter().filter(|&&c| c == own).count();
             if own_count > 1 {
                 continue;
@@ -371,7 +455,13 @@ fn smooth_boundaries(topo: &Topology, reg: &Regions, subset: &[u32], face_chart:
 
 /// Merges each small chart into the neighbor it shares most of its boundary
 /// with, if the merged chart still satisfies the normal cone.
-fn merge_charts(reg: &Regions, chart_of: &mut [u32], charts: &mut [Vec<u32>], states: &mut [ChartState], cos_max: f64) {
+fn merge_charts(
+    reg: &Regions,
+    chart_of: &mut [u32],
+    charts: &mut [Vec<u32>],
+    states: &mut [ChartState],
+    cos_max: f64,
+) {
     let total_area: f64 = states.iter().map(|s| s.area).sum();
     let live = charts.len();
     if live < 2 {
@@ -379,7 +469,9 @@ fn merge_charts(reg: &Regions, chart_of: &mut [u32], charts: &mut [Vec<u32>], st
     }
     let small = total_area / live as f64 * 0.25;
     loop {
-        let mut order: Vec<usize> = (0..charts.len()).filter(|&c| !charts[c].is_empty()).collect();
+        let mut order: Vec<usize> = (0..charts.len())
+            .filter(|&c| !charts[c].is_empty())
+            .collect();
         order.sort_by(|&a, &b| states[a].area.total_cmp(&states[b].area).then(a.cmp(&b)));
         let mut merged_any = false;
         for c in order {
@@ -399,16 +491,29 @@ fn merge_charts(reg: &Regions, chart_of: &mut [u32], charts: &mut [Vec<u32>], st
                     }
                 }
             }
-            let Some(&(n, len)) = shared.iter().max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0))) else { continue };
+            let Some(&(n, len)) = shared
+                .iter()
+                .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
+            else {
+                continue;
+            };
             let ratio = len / states[c].boundary;
-            let worth = ratio >= 0.5 || (states[c].area < small && ratio >= 0.25) || states[c].area < small * 0.1;
+            let worth = ratio >= 0.5
+                || (states[c].area < small && ratio >= 0.25)
+                || states[c].area < small * 0.1;
             if !worth {
                 continue;
             }
             let n = n as usize;
             let nsum = add3(states[c].nsum, states[n].nsum);
-            let Some(axis) = normalize3(nsum) else { continue };
-            let fits = |members: &[u32]| members.iter().all(|&r| dot3(reg.normal[r as usize], axis) >= cos_max);
+            let Some(axis) = normalize3(nsum) else {
+                continue;
+            };
+            let fits = |members: &[u32]| {
+                members
+                    .iter()
+                    .all(|&r| dot3(reg.normal[r as usize], axis) >= cos_max)
+            };
             if !fits(&charts[c]) || !fits(&charts[n]) {
                 continue;
             }

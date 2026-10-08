@@ -58,10 +58,10 @@ mod segment;
 mod solver;
 mod topology;
 
-use std::collections::HashMap;
-use std::fmt;
 use progress::Ctx;
 pub use progress::{Progress, Stage};
+use std::collections::HashMap;
+use std::fmt;
 use topology::{Topology, NONE};
 
 /// An indexed triangle mesh to unwrap.
@@ -116,7 +116,15 @@ pub struct MeshInput<'a> {
 
 impl Default for MeshInput<'_> {
     fn default() -> Self {
-        MeshInput { positions: &[], indices: &[], face_materials: None, face_ignore: None, scale: 1.0, instances: &[], uvs: None }
+        MeshInput {
+            positions: &[],
+            indices: &[],
+            face_materials: None,
+            face_ignore: None,
+            scale: 1.0,
+            instances: &[],
+            uvs: None,
+        }
     }
 }
 
@@ -373,15 +381,21 @@ fn validate_options(o: &Options) -> Result<(), Error> {
         return Err(Error::InvalidOption("max_chart_angle must be in (0, 90)"));
     }
     if !(o.max_area_distortion >= 1.0 && o.max_area_distortion.is_finite()) {
-        return Err(Error::InvalidOption("max_area_distortion must be finite and >= 1"));
+        return Err(Error::InvalidOption(
+            "max_area_distortion must be finite and >= 1",
+        ));
     }
     if let Some(t) = o.texels_per_unit {
         if !(t > 0.0 && t.is_finite()) {
-            return Err(Error::InvalidOption("texels_per_unit must be finite and > 0"));
+            return Err(Error::InvalidOption(
+                "texels_per_unit must be finite and > 0",
+            ));
         }
     }
     if o.block_align && o.resolution % 4 != 0 {
-        return Err(Error::InvalidOption("resolution must be a multiple of 4 with block_align"));
+        return Err(Error::InvalidOption(
+            "resolution must be a multiple of 4 with block_align",
+        ));
     }
     if o.resolution > 0 && o.padding.saturating_mul(2) >= o.resolution {
         return Err(Error::InvalidOption("padding too large for resolution"));
@@ -391,28 +405,52 @@ fn validate_options(o: &Options) -> Result<(), Error> {
 
 fn validate_mesh(mi: usize, m: &MeshInput<'_>) -> Result<(), Error> {
     if m.indices.len() % 3 != 0 {
-        return Err(Error::InvalidIndexCount { mesh: mi, count: m.indices.len() });
+        return Err(Error::InvalidIndexCount {
+            mesh: mi,
+            count: m.indices.len(),
+        });
     }
     if let Some(&index) = m.indices.iter().find(|&&i| i as usize >= m.positions.len()) {
-        return Err(Error::IndexOutOfRange { mesh: mi, index, vertex_count: m.positions.len() });
+        return Err(Error::IndexOutOfRange {
+            mesh: mi,
+            index,
+            vertex_count: m.positions.len(),
+        });
     }
-    if let Some(vertex) = m.positions.iter().position(|p| p.iter().any(|c| !c.is_finite())) {
+    if let Some(vertex) = m
+        .positions
+        .iter()
+        .position(|p| p.iter().any(|c| !c.is_finite()))
+    {
         return Err(Error::NonFinitePosition { mesh: mi, vertex });
     }
     let face_count = m.indices.len() / 3;
-    let lens = [m.face_materials.map(<[_]>::len), m.face_ignore.map(<[_]>::len)];
+    let lens = [
+        m.face_materials.map(<[_]>::len),
+        m.face_ignore.map(<[_]>::len),
+    ];
     if let Some(len) = lens.into_iter().flatten().find(|&l| l != face_count) {
-        return Err(Error::FaceDataLength { mesh: mi, len, face_count });
+        return Err(Error::FaceDataLength {
+            mesh: mi,
+            len,
+            face_count,
+        });
     }
     if let Some(uvs) = m.uvs {
         if uvs.len() != m.positions.len() {
-            return Err(Error::UvCount { mesh: mi, len: uvs.len(), vertex_count: m.positions.len() });
+            return Err(Error::UvCount {
+                mesh: mi,
+                len: uvs.len(),
+                vertex_count: m.positions.len(),
+            });
         }
         if let Some(vertex) = uvs.iter().position(|p| p.iter().any(|c| !c.is_finite())) {
             return Err(Error::NonFiniteUv { mesh: mi, vertex });
         }
     }
-    if !(m.scale > 0.0 && m.scale.is_finite()) || m.instances.iter().any(|k| !(*k > 0.0 && k.is_finite())) {
+    if !(m.scale > 0.0 && m.scale.is_finite())
+        || m.instances.iter().any(|k| !(*k > 0.0 && k.is_finite()))
+    {
         return Err(Error::InvalidScale { mesh: mi });
     }
     Ok(())
@@ -443,7 +481,11 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
 /// })?;
 /// # Ok::<(), uvunwrap::Error>(())
 /// ```
-pub fn generate_with_progress(meshes: &[MeshInput<'_>], options: &Options, callback: impl Fn(Progress) -> bool + Sync) -> Result<Atlas, Error> {
+pub fn generate_with_progress(
+    meshes: &[MeshInput<'_>],
+    options: &Options,
+    callback: impl Fn(Progress) -> bool + Sync,
+) -> Result<Atlas, Error> {
     run(meshes, options, &Ctx::new(Some(&callback)))
 }
 
@@ -458,7 +500,11 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
     let mut segmented = Vec::with_capacity(meshes.len());
     for m in meshes {
         let topo = Topology::build(m);
-        let groups = if m.uvs.is_some() { segment::components(&topo) } else { segment::segment(&topo, max_angle) };
+        let groups = if m.uvs.is_some() {
+            segment::components(&topo)
+        } else {
+            segment::segment(&topo, max_angle)
+        };
         segmented.push((topo, groups));
         ctx.advance(progress::Stage::Segmenting, 1, meshes.len())?;
     }
@@ -470,8 +516,11 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
             let charts = match m.uvs {
                 None => param::parameterize_all(&topo, groups, max_distortion, ctx, faces),
                 Some(uvs) => {
-                    let face_uvs: Vec<[[f64; 2]; 3]> =
-                        m.indices.chunks_exact(3).map(|t| [0, 1, 2].map(|c| uvs[t[c] as usize].map(f64::from))).collect();
+                    let face_uvs: Vec<[[f64; 2]; 3]> = m
+                        .indices
+                        .chunks_exact(3)
+                        .map(|t| [0, 1, 2].map(|c| uvs[t[c] as usize].map(f64::from)))
+                        .collect();
                     param::from_islands(&topo, groups, &face_uvs, max_distortion, ctx, faces)
                 }
             };
@@ -486,17 +535,37 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
     // instances become tiles.
     let geoms: Vec<Vec<pack::ChartGeom>> = per_mesh
         .iter()
-        .map(|(_, charts)| charts.iter().map(|c| pack::ChartGeom { uvs: &c.uvs, tris: &c.face_local, size: c.size, area: c.area }).collect())
+        .map(|(_, charts)| {
+            charts
+                .iter()
+                .map(|c| pack::ChartGeom {
+                    uvs: &c.uvs,
+                    tris: &c.face_local,
+                    size: c.size,
+                    area: c.area,
+                })
+                .collect()
+        })
         .collect();
-    let direct: Vec<pack::ChartGeom> =
-        meshes.iter().zip(&geoms).filter(|(m, _)| m.instances.is_empty()).flat_map(|(_, g)| g.iter().copied()).collect();
-    let scales: Vec<Vec<f64>> = meshes.iter().map(|m| m.instances.iter().map(|&k| k as f64).collect()).collect();
+    let direct: Vec<pack::ChartGeom> = meshes
+        .iter()
+        .zip(&geoms)
+        .filter(|(m, _)| m.instances.is_empty())
+        .flat_map(|(_, g)| g.iter().copied())
+        .collect();
+    let scales: Vec<Vec<f64>> = meshes
+        .iter()
+        .map(|m| m.instances.iter().map(|&k| k as f64).collect())
+        .collect();
     let tiles: Vec<pack::TileSpec> = meshes
         .iter()
         .zip(&geoms)
         .zip(&scales)
         .filter(|((m, _), _)| !m.instances.is_empty())
-        .map(|((_, g), k)| pack::TileSpec { charts: g, scales: k })
+        .map(|((_, g), k)| pack::TileSpec {
+            charts: g,
+            scales: k,
+        })
         .collect();
     let packer = pack::Packer {
         charts: &direct,
@@ -508,7 +577,11 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
         block: if options.block_align { 4 } else { 1 },
         ctx,
     };
-    let packed = pack::pack(&packer, options.texels_per_unit.map(f64::from), options.resolution)?;
+    let packed = pack::pack(
+        &packer,
+        options.texels_per_unit.map(f64::from),
+        options.resolution,
+    )?;
     let s = packed.texels_per_unit;
     let (pw, ph) = (packed.width as f64, packed.height as f64);
     let pad = options.padding as f64;
@@ -520,7 +593,10 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
     for (m, (topo, charts)) in meshes.iter().zip(&per_mesh) {
         let tile = (!m.instances.is_empty()).then(|| {
             tile_index += 1;
-            (&packed.tiles[tile_index - 1], &packed.instances[tile_index - 1])
+            (
+                &packed.tiles[tile_index - 1],
+                &packed.instances[tile_index - 1],
+            )
         });
         let nf = topo.faces.len();
         let mut face_chart = vec![NONE; nf];
@@ -540,8 +616,13 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
                     let d = layout.density;
                     let cd = pack::chart_density(ch.size, d, layout.chart_limit);
                     // Instance `k` shows the layout scaled by `k * s / d`.
-                    covered += ch.area * m.instances.iter().map(|&k| (cd * k as f64 * s / d) * (cd * k as f64 * s / d)).sum::<f64>();
-                    let extent = [layout.inner[0] * d, layout.inner[1] * d].map(|e| e.max(f64::MIN_POSITIVE));
+                    covered += ch.area
+                        * m.instances
+                            .iter()
+                            .map(|&k| (cd * k as f64 * s / d) * (cd * k as f64 * s / d))
+                            .sum::<f64>();
+                    let extent = [layout.inner[0] * d, layout.inner[1] * d]
+                        .map(|e| e.max(f64::MIN_POSITIVE));
                     (layout.placements[ci], cd, [pad, pad], extent)
                 }
             };
@@ -563,7 +644,10 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
                         let [x, y] = mask::rotate_texel([x * s, y * s], pl.rotation, cw, chh);
                         let tx = pl.x as f64 + pad + x - origin[0];
                         let ty = pl.y as f64 + pad + y - origin[1];
-                        [(tx / extent[0]).clamp(0.0, 1.0) as f32, (ty / extent[1]).clamp(0.0, 1.0) as f32]
+                        [
+                            (tx / extent[0]).clamp(0.0, 1.0) as f32,
+                            (ty / extent[1]).clamp(0.0, 1.0) as f32,
+                        ]
                     })
                     .collect(),
             );
@@ -577,20 +661,38 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
                 .zip(placements)
                 .map(|(&k, ip)| {
                     let (x, y) = (ip.x as f64 + pad, ip.y as f64 + pad);
-                    let (w, h) = (layout.inner[0] * k as f64 * s, layout.inner[1] * k as f64 * s);
-                    let uv = |x: f64, y: f64| [(x / pw).clamp(0.0, 1.0) as f32, (y / ph).clamp(0.0, 1.0) as f32];
-                    InstanceRect { page: ip.page, min: uv(x, y), max: uv(x + w, y + h) }
+                    let (w, h) = (
+                        layout.inner[0] * k as f64 * s,
+                        layout.inner[1] * k as f64 * s,
+                    );
+                    let uv = |x: f64, y: f64| {
+                        [
+                            (x / pw).clamp(0.0, 1.0) as f32,
+                            (y / ph).clamp(0.0, 1.0) as f32,
+                        ]
+                    };
+                    InstanceRect {
+                        page: ip.page,
+                        min: uv(x, y),
+                        max: uv(x + w, y + h),
+                    }
                 })
                 .collect(),
         };
-        let mut out = OutputMesh { vertices: Vec::new(), indices: Vec::with_capacity(m.indices.len()), instances };
+        let mut out = OutputMesh {
+            vertices: Vec::new(),
+            indices: Vec::with_capacity(m.indices.len()),
+            instances,
+        };
         // (input vertex, chart, local vertex or NONE) -> output vertex.
         let mut lookup: HashMap<(u32, u32, u32), u32> = HashMap::new();
         for (f, tri) in m.indices.chunks_exact(3).enumerate() {
             // Degenerate and ignored faces collapse onto one existing UV of one
             // of their corners, so they never stretch across the atlas.
             let anchor = if face_chart[f] == NONE {
-                tri.iter().map(|&o| first[topo.welded[o as usize] as usize]).find(|a| a.0 != NONE)
+                tri.iter()
+                    .map(|&o| first[topo.welded[o as usize] as usize])
+                    .find(|a| a.0 != NONE)
             } else {
                 None
             };
@@ -598,7 +700,11 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
                 let key = match anchor {
                     _ if face_chart[f] != NONE => {
                         let ci = face_chart[f];
-                        (orig, ci, charts[ci as usize].face_local[face_slot[f] as usize][c])
+                        (
+                            orig,
+                            ci,
+                            charts[ci as usize].face_local[face_slot[f] as usize][c],
+                        )
                     }
                     Some((ci, l)) => (orig, ci, l),
                     None => (orig, NONE, NONE),
@@ -608,10 +714,23 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
                     let (uv, chart, page) = if ci == NONE {
                         ([0.0, 0.0], None, 0)
                     } else {
-                        let page = if tile.is_some() { 0 } else { packed.placements[direct_base + ci as usize].page };
-                        (uvs[ci as usize][l as usize], Some((chart_base + ci as usize) as u32), page)
+                        let page = if tile.is_some() {
+                            0
+                        } else {
+                            packed.placements[direct_base + ci as usize].page
+                        };
+                        (
+                            uvs[ci as usize][l as usize],
+                            Some((chart_base + ci as usize) as u32),
+                            page,
+                        )
                     };
-                    out.vertices.push(OutputVertex { xref: orig, uv, chart, page });
+                    out.vertices.push(OutputVertex {
+                        xref: orig,
+                        uv,
+                        chart,
+                        page,
+                    });
                     (out.vertices.len() - 1) as u32
                 });
                 out.indices.push(idx);

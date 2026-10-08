@@ -57,7 +57,12 @@ impl Mask {
     }
 
     fn from_bits(bits: &Bits) -> Mask {
-        let mut m = Mask { w: bits.w, h: bits.h, row_start: Vec::with_capacity(bits.h as usize + 1), ..Mask::default() };
+        let mut m = Mask {
+            w: bits.w,
+            h: bits.h,
+            row_start: Vec::with_capacity(bits.h as usize + 1),
+            ..Mask::default()
+        };
         m.row_start.push(0);
         for r in 0..bits.h {
             let mut x = 0;
@@ -123,7 +128,12 @@ impl Mask {
 
     /// The mask rotated by 180°.
     fn rotate180(&self) -> Mask {
-        let mut m = Mask { w: self.w, h: self.h, area: self.area, ..Mask::default() };
+        let mut m = Mask {
+            w: self.w,
+            h: self.h,
+            area: self.area,
+            ..Mask::default()
+        };
         m.row_start.push(0);
         for r in (0..self.h).rev() {
             for &[a, b] in self.row(r).iter().rev() {
@@ -174,7 +184,12 @@ struct Bits {
 impl Bits {
     fn new(w: u32, h: u32) -> Bits {
         let words = (w as usize + 63) / 64;
-        Bits { w, h, words, data: vec![0; words * h as usize] }
+        Bits {
+            w,
+            h,
+            words,
+            data: vec![0; words * h as usize],
+        }
     }
 
     #[inline]
@@ -184,12 +199,21 @@ impl Bits {
 
     /// Sets `[a, b)` in row `y`.
     fn fill(&mut self, y: u32, a: u32, b: u32) {
-        fill_row(&mut self.data[y as usize * self.words..(y as usize + 1) * self.words], a, b);
+        fill_row(
+            &mut self.data[y as usize * self.words..(y as usize + 1) * self.words],
+            a,
+            b,
+        );
     }
 
     /// First `x' >= x` whose bit equals `value`, or `w`.
     fn next(&self, y: u32, x: u32, value: bool) -> u32 {
-        next_in_row(&self.data[y as usize * self.words..(y as usize + 1) * self.words], x, value).min(self.w)
+        next_in_row(
+            &self.data[y as usize * self.words..(y as usize + 1) * self.words],
+            x,
+            value,
+        )
+        .min(self.w)
     }
 }
 
@@ -237,9 +261,19 @@ pub(crate) struct ChartMasks {
 
 /// Rasterizes a chart (UVs in world units, scaled by `s`) conservatively into
 /// its padded mask and derives the requested rotations from it.
-pub(crate) fn chart_masks(uvs: &[V2], tris: &[[u32; 3]], size: V2, s: f64, padding: u32, rotations: u8) -> ChartMasks {
+pub(crate) fn chart_masks(
+    uvs: &[V2],
+    tris: &[[u32; 3]],
+    size: V2,
+    s: f64,
+    padding: u32,
+    rotations: u8,
+) -> ChartMasks {
     let (cw, ch) = content_size(size, s);
-    let (w, h) = (cw.saturating_add(padding.saturating_mul(2)), ch.saturating_add(padding.saturating_mul(2)));
+    let (w, h) = (
+        cw.saturating_add(padding.saturating_mul(2)),
+        ch.saturating_add(padding.saturating_mul(2)),
+    );
     let mut bits = Bits::new(w, h);
     let off = padding as f64;
     // Grow each triangle slightly so f32 rounding of the final UVs can never
@@ -256,7 +290,9 @@ pub(crate) fn chart_masks(uvs: &[V2], tris: &[[u32; 3]], size: V2, s: f64, paddi
         let r1 = (ymax.floor().max(0.0) as u32).min(h - 1);
         for r in r0..=r1 {
             // X extent of the triangle within the closed row slab [r, r + 1].
-            let Some((xmin, xmax)) = slab_extent(&p, r as f64 - eps, r as f64 + 1.0 + eps) else { continue };
+            let Some((xmin, xmax)) = slab_extent(&p, r as f64 - eps, r as f64 + 1.0 + eps) else {
+                continue;
+            };
             let c0 = ((xmin - eps).ceil() - 1.0).max(0.0) as u32;
             let c1 = ((xmax + eps).floor().max(0.0) as u32).min(w - 1);
             if c0 <= c1 {
@@ -307,7 +343,12 @@ fn slab_extent(p: &[V2; 3], y0: f64, y1: f64) -> Option<(f64, f64)> {
 /// Square (Chebyshev) dilation by `r` texels.
 fn dilate(src: &Bits, r: u32) -> Bits {
     if r == 0 {
-        return Bits { w: src.w, h: src.h, words: src.words, data: src.data.clone() };
+        return Bits {
+            w: src.w,
+            h: src.h,
+            words: src.words,
+            data: src.data.clone(),
+        };
     }
     let mut horiz = Bits::new(src.w, src.h);
     for y in 0..src.h {
@@ -325,7 +366,10 @@ fn dilate(src: &Bits, r: u32) -> Bits {
     let mut out = Bits::new(src.w, src.h);
     let n = src.words;
     for y in 0..src.h as usize {
-        let (y0, y1) = (y.saturating_sub(r as usize), (y + r as usize).min(src.h as usize - 1));
+        let (y0, y1) = (
+            y.saturating_sub(r as usize),
+            (y + r as usize).min(src.h as usize - 1),
+        );
         for yy in y0..=y1 {
             for k in 0..n {
                 out.data[y * n + k] |= horiz.data[yy * n + k];
@@ -352,7 +396,16 @@ pub(crate) struct Page {
 
 impl Page {
     pub fn new(w: u32, max_h: u32) -> Page {
-        Page { w, max_h, words: (w as usize + 63) / 64, data: Vec::new(), free_run: Vec::new(), runs: Vec::new(), used_width: 0, used_height: 0 }
+        Page {
+            w,
+            max_h,
+            words: (w as usize + 63) / 64,
+            data: Vec::new(),
+            free_run: Vec::new(),
+            runs: Vec::new(),
+            used_width: 0,
+            used_height: 0,
+        }
     }
 
     fn rows(&self) -> u32 {
@@ -435,7 +488,11 @@ impl Page {
             // Only positions where the mask's longest span lies inside a free
             // run of its page row are candidates.
             let lr = y + m.long_row;
-            let runs: &[[u32; 2]] = if lr < self.rows() { &self.runs[lr as usize] } else { &whole };
+            let runs: &[[u32; 2]] = if lr < self.rows() {
+                &self.runs[lr as usize]
+            } else {
+                &whole
+            };
             let (a, len) = (m.long_start, m.long_len);
             for &[s, e] in runs {
                 // x + a in [s, e - len], and x + w <= page width.
@@ -509,14 +566,28 @@ mod tests {
     fn rotations_match_transform() {
         // An L-shaped chart: rasterize at each rotation directly and compare
         // with the derived masks.
-        let uvs = [[0.0, 0.0], [3.0, 0.0], [3.0, 1.0], [1.0, 1.0], [1.0, 2.0], [0.0, 2.0]];
+        let uvs = [
+            [0.0, 0.0],
+            [3.0, 0.0],
+            [3.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 2.0],
+            [0.0, 2.0],
+        ];
         let tris = [[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 5]];
         let s = 3.7;
         let derived = chart_masks(&uvs, &tris, [3.0, 2.0], s, 1, 4);
         let (cw, ch) = content_size([3.0, 2.0], s);
         for k in 0..4u8 {
-            let moved: Vec<V2> = uvs.iter().map(|&q| rotate_texel([q[0] * s, q[1] * s], k, cw, ch)).collect();
-            let size = if k % 2 == 0 { [cw as f64, ch as f64] } else { [ch as f64, cw as f64] };
+            let moved: Vec<V2> = uvs
+                .iter()
+                .map(|&q| rotate_texel([q[0] * s, q[1] * s], k, cw, ch))
+                .collect();
+            let size = if k % 2 == 0 {
+                [cw as f64, ch as f64]
+            } else {
+                [ch as f64, cw as f64]
+            };
             let direct = &chart_masks(&moved, &tris, size, 1.0, 1, 1).rot[0];
             let d = &derived.rot[k as usize];
             assert_eq!((d.w, d.h), (direct.w, direct.h), "rotation {k}");
@@ -530,7 +601,10 @@ mod tests {
     fn coarse_to_fine_is_a_permutation() {
         for h in 0..40 {
             let mut o = coarse_to_fine(h);
-            assert_eq!(o[..2.min(h as usize)], [0, h.saturating_sub(1)][..2.min(h as usize)]);
+            assert_eq!(
+                o[..2.min(h as usize)],
+                [0, h.saturating_sub(1)][..2.min(h as usize)]
+            );
             o.sort();
             assert_eq!(o, (0..h).collect::<Vec<_>>(), "h = {h}");
         }
@@ -542,14 +616,33 @@ mod tests {
         let mut uvs = ring_outer.to_vec();
         uvs.extend([[3.0, 3.0], [7.0, 3.0], [7.0, 7.0], [3.0, 7.0]]);
         // A square frame around a 4x4 hole.
-        let tris = [[0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]];
+        let tris = [
+            [0, 1, 5],
+            [0, 5, 4],
+            [1, 2, 6],
+            [1, 6, 5],
+            [2, 3, 7],
+            [2, 7, 6],
+            [3, 0, 4],
+            [3, 4, 7],
+        ];
         let frame = chart_masks(&uvs, &tris, [10.0, 10.0], 1.0, 0, 1);
-        let small = chart_masks(&[[0.0, 0.0], [1.5, 0.0], [0.0, 1.5]], &[[0, 1, 2]], [1.5, 1.5], 1.0, 0, 1);
+        let small = chart_masks(
+            &[[0.0, 0.0], [1.5, 0.0], [0.0, 1.5]],
+            &[[0, 1, 2]],
+            [1.5, 1.5],
+            1.0,
+            0,
+            1,
+        );
         let mut page = Page::new(10, 10);
         let (x, y) = page.find(&frame.rot[0], u64::MAX).unwrap();
         page.insert(&frame.rot[0], x, y);
         // The small chart must land inside the hole.
         let (x, y) = page.find(&small.rot[0], u64::MAX).unwrap();
-        assert!((3..=5).contains(&x) && (3..=5).contains(&y), "placed at {x},{y}");
+        assert!(
+            (3..=5).contains(&x) && (3..=5).contains(&y),
+            "placed at {x},{y}"
+        );
     }
 }

@@ -26,7 +26,11 @@ pub struct Mesh {
 
 impl Mesh {
     pub fn input(&self) -> MeshInput<'_> {
-        MeshInput { positions: &self.positions, indices: &self.indices, ..Default::default() }
+        MeshInput {
+            positions: &self.positions,
+            indices: &self.indices,
+            ..Default::default()
+        }
     }
 
     pub fn faces(&self) -> usize {
@@ -37,8 +41,17 @@ impl Mesh {
 // ---------------------------------------------------------------- generators
 
 /// Parametric surface sampled on a grid, optionally wrapping in u and/or v.
-pub fn surface(nu: u32, nv: u32, wrap_u: bool, wrap_v: bool, f: impl Fn(f32, f32) -> [f32; 3]) -> Mesh {
-    let (cu, cv) = (if wrap_u { nu } else { nu + 1 }, if wrap_v { nv } else { nv + 1 });
+pub fn surface(
+    nu: u32,
+    nv: u32,
+    wrap_u: bool,
+    wrap_v: bool,
+    f: impl Fn(f32, f32) -> [f32; 3],
+) -> Mesh {
+    let (cu, cv) = (
+        if wrap_u { nu } else { nu + 1 },
+        if wrap_v { nv } else { nv + 1 },
+    );
     let mut positions = Vec::new();
     for j in 0..cv {
         for i in 0..cu {
@@ -78,7 +91,9 @@ pub fn sphere(nu: u32, nv: u32) -> Mesh {
 }
 
 pub fn cylinder(n: u32) -> Mesh {
-    surface(n, 4, true, false, |u, v| [(u * TAU).cos(), (u * TAU).sin(), v * 3.0])
+    surface(n, 4, true, false, |u, v| {
+        [(u * TAU).cos(), (u * TAU).sin(), v * 3.0]
+    })
 }
 
 /// Cube with split vertices per face (24 vertices), like a typical exported mesh.
@@ -105,12 +120,18 @@ pub fn cube() -> Mesh {
 
 /// The same triangles with every corner its own vertex (flat shading).
 pub fn soup(m: &Mesh) -> Mesh {
-    Mesh { positions: m.indices.iter().map(|&i| m.positions[i as usize]).collect(), indices: (0..m.indices.len() as u32).collect() }
+    Mesh {
+        positions: m.indices.iter().map(|&i| m.positions[i as usize]).collect(),
+        indices: (0..m.indices.len() as u32).collect(),
+    }
 }
 
 /// Faces of `m` whose centroid is right of `x`.
 pub fn right_of(m: &Mesh, x: f32) -> Vec<bool> {
-    m.indices.chunks_exact(3).map(|t| t.iter().map(|&i| m.positions[i as usize][0]).sum::<f32>() / 3.0 > x).collect()
+    m.indices
+        .chunks_exact(3)
+        .map(|t| t.iter().map(|&i| m.positions[i as usize][0]).sum::<f32>() / 3.0 > x)
+        .collect()
 }
 
 /// `plane(12)` with its vertices split down the middle (x = 1), as an
@@ -172,7 +193,11 @@ pub fn tri_area(p: [[f64; 2]; 3]) -> f64 {
 
 /// UV area of one face of an output mesh.
 pub fn uv_area(out: &OutputMesh, face: usize) -> f64 {
-    tri_area([0, 1, 2].map(|c| out.vertices[out.indices[face * 3 + c] as usize].uv.map(f64::from)))
+    tri_area([0, 1, 2].map(|c| {
+        out.vertices[out.indices[face * 3 + c] as usize]
+            .uv
+            .map(f64::from)
+    }))
 }
 
 /// Total UV area of an output mesh.
@@ -213,7 +238,10 @@ pub fn texel_bounds(atlas: &Atlas, out: &OutputMesh) -> ([f64; 2], [f64; 2]) {
 // --------------------------------------------------------------------- check
 
 fn dist(a: [f32; 3], b: [f32; 3]) -> f64 {
-    ((0..3).map(|k| (a[k] as f64 - b[k] as f64).powi(2)).sum::<f64>()).sqrt()
+    ((0..3)
+        .map(|k| (a[k] as f64 - b[k] as f64).powi(2))
+        .sum::<f64>())
+    .sqrt()
 }
 
 /// Altitude of a 3D triangle over its longest edge.
@@ -248,11 +276,17 @@ fn bbox_diagonal(points: &[[f32; 3]]) -> f64 {
 /// Convex hull (monotone chain), counter-clockwise.
 fn hull(mut pts: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
     pts.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
-    let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    };
     let mut h: Vec<[f64; 2]> = Vec::new();
     for pass in 0..2 {
         let start = h.len();
-        let iter: Box<dyn Iterator<Item = &[f64; 2]>> = if pass == 0 { Box::new(pts.iter()) } else { Box::new(pts.iter().rev()) };
+        let iter: Box<dyn Iterator<Item = &[f64; 2]>> = if pass == 0 {
+            Box::new(pts.iter())
+        } else {
+            Box::new(pts.iter().rev())
+        };
         for &p in iter {
             while h.len() >= start + 2 && cross(h[h.len() - 2], h[h.len() - 1], p) <= 0.0 {
                 h.pop();
@@ -287,7 +321,11 @@ fn polygons_overlap(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
 /// `t` grown by `r` in every axis direction (Minkowski sum with a square), so
 /// overlapping it means being within Chebyshev distance `r` of `t`.
 fn inflate(t: &[[f64; 2]; 3], r: f64) -> Vec<[f64; 2]> {
-    hull(t.iter().flat_map(|p| [[-r, -r], [r, -r], [r, r], [-r, r]].map(|d| [p[0] + d[0], p[1] + d[1]])).collect())
+    hull(
+        t.iter()
+            .flat_map(|p| [[-r, -r], [r, -r], [r, r], [-r, r]].map(|d| [p[0] + d[0], p[1] + d[1]]))
+            .collect(),
+    )
 }
 
 /// A charted triangle in texel space.
@@ -321,21 +359,28 @@ pub fn check(atlas: &Atlas, inputs: &[MeshInput], opts: &Options) {
     for (out, input) in atlas.meshes.iter().zip(inputs) {
         assert_eq!(out.indices.len(), input.indices.len());
         for (k, &i) in out.indices.iter().enumerate() {
-            assert_eq!(out.vertices[i as usize].xref, input.indices[k], "topology changed");
+            assert_eq!(
+                out.vertices[i as usize].xref, input.indices[k],
+                "topology changed"
+            );
         }
         assert_eq!(out.instances.len(), input.instances.len());
         // Faces the crate may leave uncharted or collapse: degenerate ones
         // (altitude below 1e-6 of the mesh size, as in topology.rs, with
         // margin) and ones too thin for f32 UVs.
         let diag = bbox_diagonal(input.positions);
-        let views: Vec<Option<InstanceRect>> =
-            if out.instances.is_empty() { vec![None] } else { out.instances.iter().copied().map(Some).collect() };
+        let views: Vec<Option<InstanceRect>> = if out.instances.is_empty() {
+            vec![None]
+        } else {
+            out.instances.iter().copied().map(Some).collect()
+        };
         for view in views {
             for (f, t) in out.indices.chunks_exact(3).enumerate() {
                 let vs = [0, 1, 2].map(|c| out.vertices[t[c] as usize]);
                 let uv = |v: &uvunwrap::OutputVertex| match view {
                     None => [v.uv[0] as f64 * dims[0], v.uv[1] as f64 * dims[1]],
-                    Some(r) => [0, 1].map(|k| (r.min[k] + v.uv[k] * (r.max[k] - r.min[k])) as f64 * dims[k]),
+                    Some(r) => [0, 1]
+                        .map(|k| (r.min[k] + v.uv[k] * (r.max[k] - r.min[k])) as f64 * dims[k]),
                 };
                 let tri = vs.map(|v| uv(&v));
                 if input.face_ignore.is_some_and(|ig| ig[f]) {
@@ -348,8 +393,14 @@ pub fn check(atlas: &Atlas, inputs: &[MeshInput], opts: &Options) {
                 }
                 let chart = vs[0].chart.expect("charted face");
                 let page = view.map_or(vs[0].page, |r| r.page);
-                assert!(vs.iter().all(|v| v.chart == Some(chart)), "face {f} spans charts");
-                assert!(view.is_some() || vs.iter().all(|v| v.page == page), "face {f} spans pages");
+                assert!(
+                    vs.iter().all(|v| v.chart == Some(chart)),
+                    "face {f} spans charts"
+                );
+                assert!(
+                    view.is_some() || vs.iter().all(|v| v.page == page),
+                    "face {f} spans pages"
+                );
                 assert!(page < atlas.page_count.max(1));
                 let area = tri_area(tri);
                 if area == 0.0 && alt <= 1e-5 * diag {
@@ -358,12 +409,21 @@ pub fn check(atlas: &Atlas, inputs: &[MeshInput], opts: &Options) {
                 assert!(area > 0.0, "face {f} flipped or collapsed: {tri:?}");
                 for p in &tri {
                     for k in 0..2 {
-                        assert!(p[k] >= pad - eps && p[k] <= dims[k] - pad + eps, "face {f} within {pad} texels of the page edge: {p:?}");
+                        assert!(
+                            p[k] >= pad - eps && p[k] <= dims[k] - pad + eps,
+                            "face {f} within {pad} texels of the page edge: {p:?}"
+                        );
                     }
                 }
                 let lo = [0, 1].map(|k| tri.iter().map(|p| p[k]).fold(f64::MAX, f64::min));
                 let hi = [0, 1].map(|k| tri.iter().map(|p| p[k]).fold(f64::MIN, f64::max));
-                placed.push(Placed { page, key: (view_id, chart), tri, lo, hi });
+                placed.push(Placed {
+                    page,
+                    key: (view_id, chart),
+                    tri,
+                    lo,
+                    hi,
+                });
             }
             view_id += 1;
         }
@@ -382,7 +442,11 @@ pub fn check(atlas: &Atlas, inputs: &[MeshInput], opts: &Options) {
                 continue;
             }
             if a.key == b.key {
-                assert!(!polygons_overlap(&a.tri, &b.tri), "triangles of chart {:?} overlap", a.key);
+                assert!(
+                    !polygons_overlap(&a.tri, &b.tri),
+                    "triangles of chart {:?} overlap",
+                    a.key
+                );
             } else {
                 assert!(
                     !polygons_overlap(&inflate(&a.tri, gap), &b.tri),

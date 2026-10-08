@@ -51,7 +51,11 @@ impl Topology {
             .map(|p| {
                 let key = [key_bits(p[0]), key_bits(p[1]), key_bits(p[2])];
                 *map.entry(key).or_insert_with(|| {
-                    wpos.push([p[0] as f64 * scale, p[1] as f64 * scale, p[2] as f64 * scale]);
+                    wpos.push([
+                        p[0] as f64 * scale,
+                        p[1] as f64 * scale,
+                        p[2] as f64 * scale,
+                    ]);
                     (wpos.len() - 1) as u32
                 })
             })
@@ -64,7 +68,11 @@ impl Topology {
                 hi[k] = hi[k].max(p[k]);
             }
         }
-        let diag = if wpos.is_empty() { 0.0 } else { len3(sub3(hi, lo)) };
+        let diag = if wpos.is_empty() {
+            0.0
+        } else {
+            len3(sub3(hi, lo))
+        };
         // Triangles thinner than this can't be represented in f32 UV space.
         let min_altitude = diag * 1e-6;
 
@@ -74,13 +82,21 @@ impl Topology {
         let mut areas = Vec::with_capacity(nf);
         let mut excluded = Vec::with_capacity(nf);
         for (fi, t) in indices.chunks_exact(3).enumerate() {
-            let f = [welded[t[0] as usize], welded[t[1] as usize], welded[t[2] as usize]];
+            let f = [
+                welded[t[0] as usize],
+                welded[t[1] as usize],
+                welded[t[2] as usize],
+            ];
             let [a, b, c] = f.map(|v| wpos[v as usize]);
             let n = cross3(sub3(b, a), sub3(c, a));
             let len = len3(n);
             let area = 0.5 * len;
             let longest = len3(sub3(b, a)).max(len3(sub3(c, b))).max(len3(sub3(a, c)));
-            let degen = f[0] == f[1] || f[1] == f[2] || f[0] == f[2] || !(len > 0.0) || !(len / longest > min_altitude);
+            let degen = f[0] == f[1]
+                || f[1] == f[2]
+                || f[0] == f[2]
+                || !(len > 0.0)
+                || !(len / longest > min_altitude);
             let skip = degen || mesh.face_ignore.is_some_and(|ig| ig[fi]);
             faces.push(f);
             normals.push(if skip { [0.0; 3] } else { scale3(n, 1.0 / len) });
@@ -97,7 +113,10 @@ impl Topology {
             for e in 0..3u8 {
                 let a = f[e as usize];
                 let b = f[(e as usize + 1) % 3];
-                edges.entry((a.min(b), a.max(b))).or_default().push((fi as u32, e));
+                edges
+                    .entry((a.min(b), a.max(b)))
+                    .or_default()
+                    .push((fi as u32, e));
             }
         }
         let material = |f: u32| mesh.face_materials.map_or(0, |m| m[f as usize]);
@@ -130,7 +149,9 @@ impl Topology {
                     neighbors[f2 as usize][e2 as usize] = f1;
                     joined += 1;
                     let (e1, e2) = (e1 as usize, e2 as usize);
-                    if differ(corner(f1, e1), corner(f2, e2 + 1)) || differ(corner(f1, e1 + 1), corner(f2, e2)) {
+                    if differ(corner(f1, e1), corner(f2, e2 + 1))
+                        || differ(corner(f1, e1 + 1), corner(f2, e2))
+                    {
                         split.push([(f1, e1), (f2, e2)]);
                     }
                 }
@@ -142,6 +163,14 @@ impl Topology {
             }
         }
 
-        Topology { welded, positions: wpos, faces, normals, areas, excluded, neighbors }
+        Topology {
+            welded,
+            positions: wpos,
+            faces,
+            normals,
+            areas,
+            excluded,
+            neighbors,
+        }
     }
 }

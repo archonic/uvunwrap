@@ -74,7 +74,8 @@ pub(crate) fn convex_hull(points: &[V2]) -> Vec<V2> {
     }
     let lower_len = hull.len() + 1;
     for &p in pts.iter().rev().skip(1) {
-        while hull.len() >= lower_len && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+        while hull.len() >= lower_len && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
+        {
             hull.pop();
         }
         hull.push(p);
@@ -102,7 +103,11 @@ fn atan_unit(t: f64) -> f64 {
     let (sign, t) = if t < 0.0 { (-1.0, -t) } else { (1.0, t) };
     // Reduce to |u| <= tan(π/12) ≈ 0.268 with atan t = π/6 + atan((√3t - 1)/(√3 + t)).
     let sqrt3 = 3f64.sqrt();
-    let (base, u) = if t > 0.2679491924311227 { (FRAC_PI_6, (sqrt3 * t - 1.0) / (sqrt3 + t)) } else { (0.0, t) };
+    let (base, u) = if t > 0.2679491924311227 {
+        (FRAC_PI_6, (sqrt3 * t - 1.0) / (sqrt3 + t))
+    } else {
+        (0.0, t)
+    };
     // u - u³/3 + u⁵/5 - ... to u^29 (error below 1e-17).
     let u2 = u * u;
     let mut r = 0.0;
@@ -226,8 +231,10 @@ mod tests {
             .collect();
         let (c2, s2) = min_area_rect_dir(&convex_hull(&pts));
         let r: Vec<V2> = pts.iter().map(|&p| rotate(p, c2, s2)).collect();
-        let w = r.iter().map(|p| p[0]).fold(f64::MIN, f64::max) - r.iter().map(|p| p[0]).fold(f64::MAX, f64::min);
-        let h = r.iter().map(|p| p[1]).fold(f64::MIN, f64::max) - r.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+        let w = r.iter().map(|p| p[0]).fold(f64::MIN, f64::max)
+            - r.iter().map(|p| p[0]).fold(f64::MAX, f64::min);
+        let h = r.iter().map(|p| p[1]).fold(f64::MIN, f64::max)
+            - r.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
         assert!((w * h - 2.0).abs() < 1e-9);
     }
 
@@ -239,8 +246,14 @@ mod tests {
             for r in [0.5, 1.0, 2.0] {
                 let (y, xx) = (x.sin() * r, x.cos() * r);
                 let (y2, x2) = ((2.0 * x).sin() * r, (2.0 * x).cos() * r);
-                assert!((angle(y, xx) - y.atan2(xx)).abs() < 1e-15, "angle({y}, {xx})");
-                assert!((angle(y2.abs(), x2) - y2.abs().atan2(x2)).abs() < 1e-15, "angle({y2}, {x2})");
+                assert!(
+                    (angle(y, xx) - y.atan2(xx)).abs() < 1e-15,
+                    "angle({y}, {xx})"
+                );
+                assert!(
+                    (angle(y2.abs(), x2) - y2.abs().atan2(x2)).abs() < 1e-15,
+                    "angle({y2}, {x2})"
+                );
             }
         }
         assert_eq!(angle(0.0, -1.0), std::f64::consts::PI);

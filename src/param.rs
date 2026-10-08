@@ -33,16 +33,33 @@ pub(crate) struct Chart {
 
 /// Parameterizes every group, reporting finished faces to `ctx` out of
 /// `total` (faces of all meshes). Returns nothing useful once cancelled.
-pub(crate) fn parameterize_all(topo: &Topology, groups: Vec<Vec<u32>>, max_distortion: f64, ctx: &Ctx, total: usize) -> Vec<Chart> {
-    let job = Job { topo, max_distortion, ctx, total };
+pub(crate) fn parameterize_all(
+    topo: &Topology,
+    groups: Vec<Vec<u32>>,
+    max_distortion: f64,
+    ctx: &Ctx,
+    total: usize,
+) -> Vec<Chart> {
+    let job = Job {
+        topo,
+        max_distortion,
+        ctx,
+        total,
+    };
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
-        groups.into_par_iter().flat_map_iter(|g| parameterize_group(&job, g)).collect()
+        groups
+            .into_par_iter()
+            .flat_map_iter(|g| parameterize_group(&job, g))
+            .collect()
     }
     #[cfg(not(feature = "parallel"))]
     {
-        groups.into_iter().flat_map(|g| parameterize_group(&job, g)).collect()
+        groups
+            .into_iter()
+            .flat_map(|g| parameterize_group(&job, g))
+            .collect()
     }
 }
 
@@ -50,16 +67,34 @@ pub(crate) fn parameterize_all(topo: &Topology, groups: Vec<Vec<u32>>, max_disto
 /// UVs of face `f`'s corners. Each island is kept as one chart (mirrored
 /// islands flipped back) unless it is unusable as is (flipped or degenerate
 /// triangles, self-overlap), in which case it is parameterized like any group.
-pub(crate) fn from_islands(topo: &Topology, islands: Vec<Vec<u32>>, face_uvs: &[[V2; 3]], max_distortion: f64, ctx: &Ctx, total: usize) -> Vec<Chart> {
-    let job = Job { topo, max_distortion, ctx, total };
+pub(crate) fn from_islands(
+    topo: &Topology,
+    islands: Vec<Vec<u32>>,
+    face_uvs: &[[V2; 3]],
+    max_distortion: f64,
+    ctx: &Ctx,
+    total: usize,
+) -> Vec<Chart> {
+    let job = Job {
+        topo,
+        max_distortion,
+        ctx,
+        total,
+    };
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
-        islands.into_par_iter().flat_map_iter(|g| island(&job, g, face_uvs)).collect()
+        islands
+            .into_par_iter()
+            .flat_map_iter(|g| island(&job, g, face_uvs))
+            .collect()
     }
     #[cfg(not(feature = "parallel"))]
     {
-        islands.into_iter().flat_map(|g| island(&job, g, face_uvs)).collect()
+        islands
+            .into_iter()
+            .flat_map(|g| island(&job, g, face_uvs))
+            .collect()
     }
 }
 
@@ -78,15 +113,19 @@ fn island(job: &Job, faces: Vec<u32>, face_uvs: &[[V2; 3]]) -> Vec<Chart> {
             [0, 1, 2].map(|c| {
                 let uv = face_uvs[f as usize][c];
                 // `+ 0.0` turns -0.0 into 0.0, so both key the same vertex.
-                *map.entry((w[c], uv.map(|x| (x + 0.0).to_bits()))).or_insert_with(|| {
-                    verts.push(w[c]);
-                    uvs.push(uv);
-                    (verts.len() - 1) as u32
-                })
+                *map.entry((w[c], uv.map(|x| (x + 0.0).to_bits())))
+                    .or_insert_with(|| {
+                        verts.push(w[c]);
+                        uvs.push(uv);
+                        (verts.len() - 1) as u32
+                    })
             })
         })
         .collect();
-    let twice_area: f64 = local.iter().map(|t| signed_area2(uvs[t[0] as usize], uvs[t[1] as usize], uvs[t[2] as usize])).sum();
+    let twice_area: f64 = local
+        .iter()
+        .map(|t| signed_area2(uvs[t[0] as usize], uvs[t[1] as usize], uvs[t[2] as usize]))
+        .sum();
     if twice_area < 0.0 {
         // Mirrored island: flip it so its triangles wind counter-clockwise.
         uvs.iter_mut().for_each(|p| p[0] = -p[0]);
@@ -106,9 +145,18 @@ struct Job<'a> {
 }
 
 impl Job<'_> {
-    fn done(&self, topo: &Topology, faces: Vec<u32>, verts: Vec<u32>, local: Vec<[u32; 3]>, uvs: Vec<V2>) -> Vec<Chart> {
+    fn done(
+        &self,
+        topo: &Topology,
+        faces: Vec<u32>,
+        verts: Vec<u32>,
+        local: Vec<[u32; 3]>,
+        uvs: Vec<V2>,
+    ) -> Vec<Chart> {
         // A cancellation is noticed by the caller.
-        let _ = self.ctx.advance(Stage::Parameterizing, faces.len(), self.total);
+        let _ = self
+            .ctx
+            .advance(Stage::Parameterizing, faces.len(), self.total);
         vec![finalize(topo, faces, verts, local, uvs)]
     }
 }
@@ -130,7 +178,8 @@ fn parameterize_group(job: &Job, faces: Vec<u32>) -> Vec<Chart> {
     if faces.len() == 1 || validate(topo, &faces, &local, &planar, 1.02).is_ok() {
         return job.done(topo, faces, verts, local, planar);
     }
-    let hopeless = faces.len() >= CURVATURE_CHECK_FACES && total_curvature(topo, &verts, &local).abs() > MAX_CURVATURE;
+    let hopeless = faces.len() >= CURVATURE_CHECK_FACES
+        && total_curvature(topo, &verts, &local).abs() > MAX_CURVATURE;
     let mut overlap = None;
     if !hopeless {
         let conformal = lscm(topo, &verts, &local, &planar);
@@ -182,7 +231,10 @@ fn total_curvature(topo: &Topology, verts: &[u32], local: &[[u32; 3]]) -> f64 {
             boundary[v as usize] = true;
         }
     }
-    (0..n).filter(|&i| !boundary[i]).map(|i| std::f64::consts::TAU - angle[i]).sum()
+    (0..n)
+        .filter(|&i| !boundary[i])
+        .map(|i| std::f64::consts::TAU - angle[i])
+        .sum()
 }
 
 fn build_local(topo: &Topology, faces: &[u32]) -> (Vec<u32>, Vec<[u32; 3]>) {
@@ -206,10 +258,17 @@ fn build_local(topo: &Topology, faces: &[u32]) -> (Vec<u32>, Vec<[u32; 3]>) {
 fn planar_projection(topo: &Topology, faces: &[u32], verts: &[u32]) -> Vec<V2> {
     let mut nsum = [0.0; 3];
     for &f in faces {
-        nsum = add3(nsum, scale3(topo.normals[f as usize], topo.areas[f as usize]));
+        nsum = add3(
+            nsum,
+            scale3(topo.normals[f as usize], topo.areas[f as usize]),
+        );
     }
     let n = normalize3(nsum).unwrap_or(topo.normals[faces[0] as usize]);
-    let t = if n[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+    let t = if n[0].abs() < 0.9 {
+        [1.0, 0.0, 0.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
     let u = normalize3(sub3(t, scale3(n, dot3(t, n)))).unwrap_or([0.0, 0.0, 1.0]);
     let v = cross3(n, u); // (u, v, n) is right-handed, so front faces stay CCW
     verts
@@ -241,8 +300,12 @@ fn lscm(topo: &Topology, verts: &[u32], local: &[[u32; 3]], init: &[V2]) -> Vec<
         }
     }
     let axis = if hi[0] - lo[0] >= hi[1] - lo[1] { 0 } else { 1 };
-    let pin_a = (0..n).min_by(|&a, &b| init[a][axis].total_cmp(&init[b][axis])).unwrap();
-    let pin_b = (0..n).max_by(|&a, &b| init[a][axis].total_cmp(&init[b][axis])).unwrap();
+    let pin_a = (0..n)
+        .min_by(|&a, &b| init[a][axis].total_cmp(&init[b][axis]))
+        .unwrap();
+    let pin_b = (0..n)
+        .max_by(|&a, &b| init[a][axis].total_cmp(&init[b][axis]))
+        .unwrap();
     if pin_a == pin_b {
         return init.to_vec();
     }
@@ -277,9 +340,23 @@ fn lscm(topo: &Topology, verts: &[u32], local: &[[u32; 3]], init: &[V2]) -> Vec<
         let [i0, i1, i2] = t.map(|l| l as usize);
         let rows: [[(usize, usize, f64); 6]; 2] = [
             // Real part. Entries are (local vertex, component 0=u/1=v, coefficient).
-            [(i0, 0, zc - za), (i0, 1, zb - zd), (i1, 0, -zc), (i1, 1, zd), (i2, 0, za), (i2, 1, -zb)],
+            [
+                (i0, 0, zc - za),
+                (i0, 1, zb - zd),
+                (i1, 0, -zc),
+                (i1, 1, zd),
+                (i2, 0, za),
+                (i2, 1, -zb),
+            ],
             // Imaginary part.
-            [(i0, 0, zd - zb), (i0, 1, zc - za), (i1, 0, -zd), (i1, 1, -zc), (i2, 0, zb), (i2, 1, za)],
+            [
+                (i0, 0, zd - zb),
+                (i0, 1, zc - za),
+                (i1, 0, -zd),
+                (i1, 1, -zc),
+                (i2, 0, zb),
+                (i2, 1, za),
+            ],
         ];
         for row in rows {
             let mut b = 0.0;
@@ -308,7 +385,13 @@ fn lscm(topo: &Topology, verts: &[u32], local: &[[u32; 3]], init: &[V2]) -> Vec<
     least_squares(&mut a, &rhs, &mut x);
 
     (0..n)
-        .map(|i| if col[i] == NONE { init[i] } else { [x[col[i] as usize], x[col[i] as usize + 1]] })
+        .map(|i| {
+            if col[i] == NONE {
+                init[i]
+            } else {
+                [x[col[i] as usize], x[col[i] as usize + 1]]
+            }
+        })
         .collect()
 }
 
@@ -316,11 +399,20 @@ fn lscm(topo: &Topology, verts: &[u32], local: &[[u32; 3]], init: &[V2]) -> Vec<
 /// per-triangle area ratio (after normalizing total area) stays within
 /// `[1/max_distortion, max_distortion]`, and no two triangles overlap. On
 /// failure due to an overlap, returns one overlapping pair (chart face indices).
-fn validate(topo: &Topology, faces: &[u32], local: &[[u32; 3]], uv: &[V2], max_distortion: f64) -> Result<(), Option<(u32, u32)>> {
+fn validate(
+    topo: &Topology,
+    faces: &[u32],
+    local: &[[u32; 3]],
+    uv: &[V2],
+    max_distortion: f64,
+) -> Result<(), Option<(u32, u32)>> {
     if uv.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {
         return Err(None);
     }
-    let areas: Vec<f64> = local.iter().map(|t| signed_area2(uv[t[0] as usize], uv[t[1] as usize], uv[t[2] as usize])).collect();
+    let areas: Vec<f64> = local
+        .iter()
+        .map(|t| signed_area2(uv[t[0] as usize], uv[t[1] as usize], uv[t[2] as usize]))
+        .collect();
     let total_uv: f64 = areas.iter().sum();
     let total_3d: f64 = faces.iter().map(|&f| topo.areas[f as usize]).sum();
     if !(total_uv > 0.0) || !(total_3d > 0.0) {
@@ -355,8 +447,14 @@ fn first_overlap(local: &[[u32; 3]], uv: &[V2], total_area: f64) -> Option<(u32,
         .iter()
         .map(|t| {
             [
-                [t[0][0].min(t[1][0]).min(t[2][0]), t[0][1].min(t[1][1]).min(t[2][1])],
-                [t[0][0].max(t[1][0]).max(t[2][0]), t[0][1].max(t[1][1]).max(t[2][1])],
+                [
+                    t[0][0].min(t[1][0]).min(t[2][0]),
+                    t[0][1].min(t[1][1]).min(t[2][1]),
+                ],
+                [
+                    t[0][0].max(t[1][0]).max(t[2][0]),
+                    t[0][1].max(t[1][1]).max(t[2][1]),
+                ],
             ]
         })
         .collect();
@@ -367,13 +465,19 @@ fn first_overlap(local: &[[u32; 3]], uv: &[V2], total_area: f64) -> Option<(u32,
             hi[k] = hi[k].max(p[k]);
         }
     }
-    let cell = (2.0 * (total_area / n as f64).sqrt()).max((hi[0] - lo[0]).max(hi[1] - lo[1]) / 1024.0);
+    let cell =
+        (2.0 * (total_area / n as f64).sqrt()).max((hi[0] - lo[0]).max(hi[1] - lo[1]) / 1024.0);
     if !(cell > 0.0) {
         return Some((0, 0));
     }
     let gx = (((hi[0] - lo[0]) / cell) as usize + 1).min(1024);
     let gy = (((hi[1] - lo[1]) / cell) as usize + 1).min(1024);
-    let cell_of = |p: V2| ((((p[0] - lo[0]) / cell) as usize).min(gx - 1), (((p[1] - lo[1]) / cell) as usize).min(gy - 1));
+    let cell_of = |p: V2| {
+        (
+            (((p[0] - lo[0]) / cell) as usize).min(gx - 1),
+            (((p[1] - lo[1]) / cell) as usize).min(gy - 1),
+        )
+    };
     // Bucket triangles by the grid cells their bounding boxes cover (CSR).
     let mut start = vec![0u32; gx * gy + 1];
     for b in &boxes {
@@ -406,7 +510,11 @@ fn first_overlap(local: &[[u32; 3]], uv: &[V2], total_area: f64) -> Option<(u32,
                 let ba = boxes[a as usize];
                 for &b in &c[k + 1..] {
                     let bb = boxes[b as usize];
-                    if ba[1][0] < bb[0][0] || bb[1][0] < ba[0][0] || ba[1][1] < bb[0][1] || bb[1][1] < ba[0][1] {
+                    if ba[1][0] < bb[0][0]
+                        || bb[1][0] < ba[0][0]
+                        || ba[1][1] < bb[0][1]
+                        || bb[1][1] < ba[0][1]
+                    {
                         continue;
                     }
                     // Test each pair once: in the cell holding the minimum
@@ -445,7 +553,12 @@ fn split(topo: &Topology, faces: &[u32], seeds: Option<(u32, u32)>) -> (Vec<u32>
         }
         dist
     };
-    let farthest = |d: &[u32]| (0..d.len()).filter(|&i| d[i] != u32::MAX).max_by_key(|&i| d[i]).unwrap_or(0);
+    let farthest = |d: &[u32]| {
+        (0..d.len())
+            .filter(|&i| d[i] != u32::MAX)
+            .max_by_key(|&i| d[i])
+            .unwrap_or(0)
+    };
     let (da, db) = match seeds {
         Some((a, b)) if a != b => (bfs(a as usize), bfs(b as usize)),
         _ => {
@@ -474,13 +587,23 @@ fn split(topo: &Topology, faces: &[u32], seeds: Option<(u32, u32)>) -> (Vec<u32>
 
 /// Scales the chart to match its 3D area, rotates it to its minimum-area
 /// bounding rectangle and moves it to the origin.
-fn finalize(topo: &Topology, faces: Vec<u32>, verts: Vec<u32>, face_local: Vec<[u32; 3]>, mut uvs: Vec<V2>) -> Chart {
+fn finalize(
+    topo: &Topology,
+    faces: Vec<u32>,
+    verts: Vec<u32>,
+    face_local: Vec<[u32; 3]>,
+    mut uvs: Vec<V2>,
+) -> Chart {
     let area: f64 = faces.iter().map(|&f| topo.areas[f as usize]).sum();
     let uv_area: f64 = face_local
         .iter()
         .map(|t| signed_area2(uvs[t[0] as usize], uvs[t[1] as usize], uvs[t[2] as usize]))
         .sum();
-    let k = if uv_area > 0.0 { (area / uv_area).sqrt() } else { 1.0 };
+    let k = if uv_area > 0.0 {
+        (area / uv_area).sqrt()
+    } else {
+        1.0
+    };
     let (c, s) = min_area_rect_dir(&convex_hull(&uvs));
     let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     for p in uvs.iter_mut() {
@@ -494,5 +617,12 @@ fn finalize(topo: &Topology, faces: Vec<u32>, verts: Vec<u32>, face_local: Vec<[
     for p in uvs.iter_mut() {
         *p = [p[0] - lo[0], p[1] - lo[1]];
     }
-    Chart { faces, verts, face_local, uvs, size: [hi[0] - lo[0], hi[1] - lo[1]], area }
+    Chart {
+        faces,
+        verts,
+        face_local,
+        uvs,
+        size: [hi[0] - lo[0], hi[1] - lo[1]],
+        area,
+    }
 }

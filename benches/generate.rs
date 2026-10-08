@@ -23,7 +23,11 @@ struct Mesh {
 
 impl Mesh {
     fn input(&self) -> MeshInput<'_> {
-        MeshInput { positions: &self.positions, indices: &self.indices, ..Default::default() }
+        MeshInput {
+            positions: &self.positions,
+            indices: &self.indices,
+            ..Default::default()
+        }
     }
 
     /// Fixed density that fills about one 1024 × 1024 page at 60% coverage.
@@ -33,8 +37,15 @@ impl Mesh {
             .chunks_exact(3)
             .map(|t| {
                 let [a, b, c] = [0, 1, 2].map(|k| self.positions[t[k] as usize]);
-                let (u, v) = ([0, 1, 2].map(|k| b[k] - a[k]), [0, 1, 2].map(|k| c[k] - a[k]));
-                let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+                let (u, v) = (
+                    [0, 1, 2].map(|k| b[k] - a[k]),
+                    [0, 1, 2].map(|k| c[k] - a[k]),
+                );
+                let n = [
+                    u[1] * v[2] - u[2] * v[1],
+                    u[2] * v[0] - u[0] * v[2],
+                    u[0] * v[1] - u[1] * v[0],
+                ];
                 0.5 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt()
             })
             .sum();
@@ -55,10 +66,22 @@ fn torus(nu: u32, nv: u32) -> Mesh {
     let mut indices = Vec::new();
     for j in 0..nv {
         for i in 0..nu {
-            indices.extend([id(i, j), id(i + 1, j), id(i + 1, j + 1), id(i, j), id(i + 1, j + 1), id(i, j + 1)]);
+            indices.extend([
+                id(i, j),
+                id(i + 1, j),
+                id(i + 1, j + 1),
+                id(i, j),
+                id(i + 1, j + 1),
+                id(i, j + 1),
+            ]);
         }
     }
-    Mesh { name: format!("torus{}", indices.len() / 3), positions, indices, uvs: None }
+    Mesh {
+        name: format!("torus{}", indices.len() / 3),
+        positions,
+        indices,
+        uvs: None,
+    }
 }
 
 /// `n` random, unconnected triangles: one chart each.
@@ -71,13 +94,19 @@ fn soup(n: usize) -> Mesh {
         (state >> 40) as f32 / (1u64 << 24) as f32
     };
     let positions: Vec<[f32; 3]> = (0..n * 3).map(|_| [next(), next(), next()]).collect();
-    Mesh { name: format!("soup{n}"), positions, indices: (0..n as u32 * 3).collect(), uvs: None }
+    Mesh {
+        name: format!("soup{n}"),
+        positions,
+        indices: (0..n as u32 * 3).collect(),
+        uvs: None,
+    }
 }
 
 /// Loads an OBJ with one vertex per distinct `v/vt` corner, keeping the
 /// `vt` coordinates if every corner has one.
 fn load_obj(name: &str) -> Option<Mesh> {
-    let text = std::fs::read_to_string(format!("{}/models/{name}.obj", env!("CARGO_MANIFEST_DIR"))).ok()?;
+    let text = std::fs::read_to_string(format!("{}/models/{name}.obj", env!("CARGO_MANIFEST_DIR")))
+        .ok()?;
     let (mut v, mut vt) = (Vec::new(), Vec::new());
     let mut corners: HashMap<(i64, i64), u32> = HashMap::new();
     let (mut positions, mut uvs, mut indices) = (Vec::new(), Vec::new(), Vec::new());
@@ -94,12 +123,17 @@ fn load_obj(name: &str) -> Option<Mesh> {
             }
             Some("f") => {
                 let resolve = |s: Option<&str>, n: usize| {
-                    s.and_then(|s| s.parse::<i64>().ok()).map(|i| if i < 0 { n as i64 + i } else { i - 1 }).unwrap_or(-1)
+                    s.and_then(|s| s.parse::<i64>().ok())
+                        .map(|i| if i < 0 { n as i64 + i } else { i - 1 })
+                        .unwrap_or(-1)
                 };
                 let poly: Vec<u32> = it
                     .map(|t| {
                         let mut parts = t.split('/');
-                        let key = (resolve(parts.next(), v.len()), resolve(parts.next(), vt.len()));
+                        let key = (
+                            resolve(parts.next(), v.len()),
+                            resolve(parts.next(), vt.len()),
+                        );
                         *corners.entry(key).or_insert_with(|| {
                             positions.push(v[key.0 as usize]);
                             uvs.push(usize::try_from(key.1).ok().and_then(|i| vt.get(i).copied()));
@@ -114,8 +148,16 @@ fn load_obj(name: &str) -> Option<Mesh> {
             _ => {}
         }
     }
-    let uvs = uvs.into_iter().collect::<Option<Vec<_>>>().filter(|u| !u.is_empty());
-    Some(Mesh { name: name.to_string(), positions, indices, uvs })
+    let uvs = uvs
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .filter(|u| !u.is_empty());
+    Some(Mesh {
+        name: name.to_string(),
+        positions,
+        indices,
+        uvs,
+    })
 }
 
 fn bench(c: &mut Criterion) {
@@ -128,20 +170,46 @@ fn bench(c: &mut Criterion) {
     }
 
     let mut group = c.benchmark_group("generate");
-    group.sample_size(10).warm_up_time(Duration::from_millis(500)).measurement_time(Duration::from_secs(3));
+    group
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(3));
     for m in &meshes {
-        let fixed = Options { texels_per_unit: Some(m.density()), resolution: 0, ..Options::default() };
+        let fixed = Options {
+            texels_per_unit: Some(m.density()),
+            resolution: 0,
+            ..Options::default()
+        };
         let cases = [
             ("shape", [m.input()], Options::default()),
-            ("rect", [m.input()], Options { packing: Packing::Rect, ..Options::default() }),
+            (
+                "rect",
+                [m.input()],
+                Options {
+                    packing: Packing::Rect,
+                    ..Options::default()
+                },
+            ),
             ("fixed", [m.input()], fixed),
-            ("instances", [MeshInput { instances: &[1.0, 1.0, 0.5, 2.0], ..m.input() }], Options::default()),
+            (
+                "instances",
+                [MeshInput {
+                    instances: &[1.0, 1.0, 0.5, 2.0],
+                    ..m.input()
+                }],
+                Options::default(),
+            ),
         ];
         for (label, input, opts) in &cases {
-            group.bench_with_input(BenchmarkId::new(*label, &m.name), input, |b, input| b.iter(|| generate(input, opts).unwrap()));
+            group.bench_with_input(BenchmarkId::new(*label, &m.name), input, |b, input| {
+                b.iter(|| generate(input, opts).unwrap())
+            });
         }
         if let Some(uvs) = &m.uvs {
-            let input = [MeshInput { uvs: Some(uvs), ..m.input() }];
+            let input = [MeshInput {
+                uvs: Some(uvs),
+                ..m.input()
+            }];
             group.bench_with_input(BenchmarkId::new("repack", &m.name), &input, |b, input| {
                 b.iter(|| generate(input, &Options::default()).unwrap())
             });

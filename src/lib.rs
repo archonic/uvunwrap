@@ -20,7 +20,7 @@
 //! // A unit quad made of two triangles.
 //! let positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
 //! let indices = [0, 1, 2, 0, 2, 3];
-//! let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices };
+//! let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices, ..Default::default() };
 //!
 //! let atlas = uvunwrap::generate(&[mesh], &uvunwrap::Options::default()).unwrap();
 //! let out = &atlas.meshes[0];
@@ -52,12 +52,38 @@ use std::fmt;
 use topology::{Topology, NONE};
 
 /// An indexed triangle mesh to unwrap.
+///
+/// Vertices with bit-identical positions are welded, so meshes whose vertices
+/// are split for normals or texture coordinates unwrap as one surface. Edges
+/// where the input *is* split (hard edges, UV seams) are preferred as chart
+/// boundaries.
+///
+/// ```
+/// # let (positions, indices) = (Vec::<[f32; 3]>::new(), Vec::<u32>::new());
+/// let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices, ..Default::default() };
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct MeshInput<'a> {
     /// Vertex positions.
     pub positions: &'a [[f32; 3]],
     /// Triangle list indices into `positions`, counter-clockwise front faces.
     pub indices: &'a [u32],
+    /// Optional per-face material ids (one per triangle). Charts never span
+    /// faces with different ids.
+    pub face_materials: Option<&'a [u32]>,
+    /// Optional per-face flags (one per triangle). Flagged faces get no chart:
+    /// their corners collapse onto an existing UV, as for degenerate faces.
+    pub face_ignore: Option<&'a [bool]>,
+    /// Factor from mesh units to world units, so instances drawn at different
+    /// scales share one texel density. Also usable as a per-mesh importance
+    /// factor. Must be finite and `> 0`. Default `1`.
+    pub scale: f32,
+}
+
+impl Default for MeshInput<'_> {
+    fn default() -> Self {
+        MeshInput { positions: &[], indices: &[], face_materials: None, face_ignore: None, scale: 1.0 }
+    }
 }
 
 /// Unwrapping options.
@@ -150,7 +176,8 @@ pub struct OutputVertex {
     /// Texture coordinate in `[0, 1]`, relative to its page. `v` grows with the
     /// texel row (row 0 at `v = 0`); flip it if your convention differs.
     pub uv: [f32; 2],
-    /// Global chart id, or `None` for vertices only used by degenerate triangles.
+    /// Global chart id, or `None` for vertices only used by degenerate or
+    /// ignored triangles that have no charted corner.
     pub chart: Option<u32>,
     /// Atlas page this vertex belongs to.
     pub page: u32,
@@ -183,6 +210,20 @@ pub enum Error {
         /// Vertex index.
         vertex: usize,
     },
+    /// A per-face array doesn't have one entry per triangle.
+    FaceDataLength {
+        /// Mesh position in the input slice.
+        mesh: usize,
+        /// Length of the per-face array.
+        len: usize,
+        /// Number of triangles in the mesh.
+        face_count: usize,
+    },
+    /// [`MeshInput::scale`] is not finite and positive.
+    InvalidScale {
+        /// Mesh position in the input slice.
+        mesh: usize,
+    },
     /// An option is out of range.
     InvalidOption(&'static str),
     /// With a fixed texel density, a chart doesn't fit in a page.
@@ -208,6 +249,10 @@ impl fmt::Display for Error {
             Error::NonFinitePosition { mesh, vertex } => {
                 write!(f, "mesh {mesh}: vertex {vertex} has a non-finite position")
             }
+            Error::FaceDataLength { mesh, len, face_count } => {
+                write!(f, "mesh {mesh}: per-face data has {len} entries for {face_count} triangles")
+            }
+            Error::InvalidScale { mesh } => write!(f, "mesh {mesh}: scale must be finite and > 0"),
             Error::InvalidOption(msg) => write!(f, "invalid option: {msg}"),
             Error::ChartTooLarge { width, height, resolution } => write!(
                 f,
@@ -247,6 +292,14 @@ fn validate_mesh(mi: usize, m: &MeshInput<'_>) -> Result<(), Error> {
     if let Some(vertex) = m.positions.iter().position(|p| p.iter().any(|c| !c.is_finite())) {
         return Err(Error::NonFinitePosition { mesh: mi, vertex });
     }
+    let face_count = m.indices.len() / 3;
+    let lens = [m.face_materials.map(<[_]>::len), m.face_ignore.map(<[_]>::len)];
+    if let Some(len) = lens.into_iter().flatten().find(|&l| l != face_count) {
+        return Err(Error::FaceDataLength { mesh: mi, len, face_count });
+    }
+    if !(m.scale > 0.0 && m.scale.is_finite()) {
+        return Err(Error::InvalidScale { mesh: mi });
+    }
     Ok(())
 }
 
@@ -265,7 +318,7 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
     let per_mesh: Vec<(Topology, Vec<param::Chart>)> = meshes
         .iter()
         .map(|m| {
-            let topo = Topology::build(m.positions, m.indices);
+            let topo = Topology::build(m);
             let groups = segment::segment(&topo, max_angle);
             let charts = param::parameterize_all(&topo, groups, max_distortion);
             (topo, charts)
@@ -328,8 +381,8 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
         // (input vertex, chart, local vertex or NONE) -> output vertex.
         let mut lookup: HashMap<(u32, u32, u32), u32> = HashMap::new();
         for (f, tri) in m.indices.chunks_exact(3).enumerate() {
-            // Degenerate faces collapse onto one existing UV of one of their
-            // corners, so they never stretch across the atlas.
+            // Degenerate and ignored faces collapse onto one existing UV of one
+            // of their corners, so they never stretch across the atlas.
             let anchor = if face_chart[f] == NONE {
                 tri.iter().map(|&o| first[topo.welded[o as usize] as usize]).find(|a| a.0 != NONE)
             } else {

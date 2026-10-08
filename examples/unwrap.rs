@@ -2,16 +2,24 @@
 //! drawing of each atlas page.
 //!
 //! ```text
-//! cargo run --release --example unwrap -- [--rect] [input.obj] [output_prefix]
+//! cargo run --release --example unwrap -- [--rect] [--flat] [input.obj] [output_prefix]
 //! ```
 //!
-//! Without arguments, a built-in torus is unwrapped into `out/torus*`.
+//! Vertices are split per distinct `v/vt/vn` corner, as an engine import
+//! would, so UV seams and hard edges reach the unwrapper. `--flat` gives every
+//! triangle its own vertices instead (flat shading). Without arguments, a
+//! built-in torus is unwrapped into `out/torus*`.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::time::Instant;
 use std::{env, fs};
 
+/// Loads an OBJ with one vertex per distinct `v/vt/vn` corner.
 fn load_obj(text: &str) -> (Vec<[f32; 3]>, Vec<u32>) {
+    let mut v: Vec<[f32; 3]> = Vec::new();
+    let (mut nt, mut nn) = (0i64, 0i64);
+    let mut corners: HashMap<[i64; 3], u32> = HashMap::new();
     let mut positions = Vec::new();
     let mut indices = Vec::new();
     for line in text.lines() {
@@ -19,14 +27,27 @@ fn load_obj(text: &str) -> (Vec<[f32; 3]>, Vec<u32>) {
         match it.next() {
             Some("v") => {
                 let c: Vec<f32> = it.take(3).map(|s| s.parse().unwrap_or(0.0)).collect();
-                positions.push([c[0], c[1], c[2]]);
+                v.push([c[0], c[1], c[2]]);
             }
+            Some("vt") => nt += 1,
+            Some("vn") => nn += 1,
             Some("f") => {
                 // "f a/b/c ..." with 1-based or negative indices; fan-triangulate polygons.
-                let n = positions.len() as i64;
+                let counts = [v.len() as i64, nt, nn];
                 let poly: Vec<u32> = it
-                    .filter_map(|t| t.split('/').next()?.parse::<i64>().ok())
-                    .map(|i| if i < 0 { n + i } else { i - 1 } as u32)
+                    .filter_map(|t| {
+                        let mut key = [-1i64; 3];
+                        for (k, part) in t.split('/').take(3).enumerate() {
+                            if let Ok(i) = part.parse::<i64>() {
+                                key[k] = if i < 0 { counts[k] + i } else { i - 1 };
+                            }
+                        }
+                        let p = *v.get(usize::try_from(key[0]).ok()?)?;
+                        Some(*corners.entry(key).or_insert_with(|| {
+                            positions.push(p);
+                            (positions.len() - 1) as u32
+                        }))
+                    })
                     .collect();
                 for k in 1..poly.len().saturating_sub(1) {
                     indices.extend([poly[0], poly[k], poly[k + 1]]);
@@ -36,6 +57,11 @@ fn load_obj(text: &str) -> (Vec<[f32; 3]>, Vec<u32>) {
         }
     }
     (positions, indices)
+}
+
+/// Gives every triangle its own three vertices.
+fn flatten(positions: &[[f32; 3]], indices: &[u32]) -> (Vec<[f32; 3]>, Vec<u32>) {
+    (indices.iter().map(|&i| positions[i as usize]).collect(), (0..indices.len() as u32).collect())
 }
 
 fn torus() -> (Vec<[f32; 3]>, Vec<u32>) {
@@ -65,6 +91,7 @@ fn main() {
         opts.packing = uvunwrap::Packing::Rect;
         args.remove(i);
     }
+    let flat = args.iter().position(|a| a == "--flat").map(|i| args.remove(i)).is_some();
     let (positions, indices, prefix) = match args.first() {
         Some(path) => {
             let (p, i) = load_obj(&fs::read_to_string(path).expect("read input"));
@@ -78,8 +105,10 @@ fn main() {
         }
     };
 
+    let (positions, indices) = if flat { flatten(&positions, &indices) } else { (positions, indices) };
+
     let start = Instant::now();
-    let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices };
+    let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices, ..Default::default() };
     let atlas = uvunwrap::generate(&[mesh], &opts).expect("unwrap failed");
     let elapsed = start.elapsed();
     let out = &atlas.meshes[0];

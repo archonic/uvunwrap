@@ -25,13 +25,14 @@ What that means for the crate (✅ done, ◐ partial, ☐ missing):
    tangents, UV_0, colors, joints/weights, custom attributes) and keep the
    existing hard edges and UV_0 seams.
 3. ◐ **Multi-mesh atlases.** `generate` packs many meshes into shared pages
-   (xatlas `AddMesh`). Missing: a per-mesh world scale or instance transform,
-   so density stays consistent across a scene of transformed instances, and
-   output that maps directly onto `Lightmap::uv_rect`.
-4. ◐ **Respect authored structure.** Charts follow position-welded topology
-   and creases. Missing: optional input normals and UV_0 as seam hints (xatlas
-   `normalSeamWeight`/`textureSeamWeight`), per-face material groups that
-   charts never cross, and per-face ignore.
+   (xatlas `AddMesh`), with a per-mesh `scale` for consistent density across
+   scaled instances. Missing: keeping each mesh on one page (a Bevy mesh
+   takes one lightmap image) and output that maps directly onto
+   `Lightmap::uv_rect`.
+4. ✅ **Respect authored structure.** Edges where the input splits vertices
+   (hard edges, UV_0 seams) are chart boundaries, which covers xatlas's
+   normal/texture seam weights without passing normals or UVs. Also
+   `face_materials` (charts never cross) and `face_ignore`.
 5. ✅ **Runtime-friendly.** Fast, no global state, `Send`, zero dependencies
    and single-threaded under `--no-default-features` for wasm. ☐ Progress
    reporting and cancellation for large meshes (xatlas `ProgressCallback`), so
@@ -60,12 +61,16 @@ Bevy or baking use case.
 
 ## Layout
 
-- `src/lib.rs`: public API (`generate`, `MeshInput`, `Options`, `Atlas`,
-  `OutputMesh`, `OutputVertex`, `Error`) and output assembly (seam vertex
-  duplication, `xref` back to input vertices, degenerate faces collapsed onto
-  one existing UV).
-- `src/topology.rs`: welding by exact position, degeneracy (altitude <
-  1e-6 × bbox diagonal), manifold + consistently oriented adjacency only.
+- `src/lib.rs`: public API (`generate`, `MeshInput` with optional
+  `face_materials`/`face_ignore`/`scale`, `Options`, `Atlas`, `OutputMesh`,
+  `OutputVertex`, `Error`) and output assembly (seam vertex duplication,
+  `xref` back to input vertices, degenerate/ignored faces collapsed onto one
+  existing UV).
+- `src/topology.rs`: welding by exact position (scaled by `MeshInput::scale`),
+  exclusion (degenerate: altitude < 1e-6 × bbox diagonal, or ignored),
+  manifold + consistently oriented adjacency within one material only. Edges
+  where the input splits vertices (authored seams) are cut too, unless more
+  than half of all adjacent edges are split (flat shading).
 - `src/segment.rs`: xatlas-style growth over planar regions: cost = normal
   deviation (crease-preserving smoothed normals, hard `max_chart_angle` cone)
   + straightness + roundness + crease penalty; then merge small enclosed
@@ -88,7 +93,8 @@ Bevy or baking use case.
   multiple fixed pages).
 - `tests/meshes.rs`: plane, cube, sphere, torus, cylinder, soup, degenerates,
   errors; checks topology preservation, UV range, no flips, no overlaps.
-- `examples/unwrap.rs`: OBJ in → OBJ with `vt` + SVG per page.
+- `examples/unwrap.rs`: OBJ in (one vertex per `v/vt/vn` corner, like an
+  engine import; `--flat` splits every face) → OBJ with `vt` + SVG per page.
 - `benches/generate.rs`: criterion (`cargo bench`), procedural meshes plus
   `models/{spot,beetle,bunny,armadillo,nefertiti}.obj` when present.
 
@@ -111,7 +117,7 @@ Bevy or baking use case.
 
 | Model | Triangles | Charts | 1 core | Multi-core | Utilization |
 |---|---|---|---|---|---|
-| Spot | 5.9K | 38 | 34 ms | 19 ms | 68% |
+| Spot | 5.9K | 47 | 27 ms | 19 ms | 71% |
 | Stanford bunny | 69K | 58 | 0.19 s | 82 ms | 65% |
 | Armadillo | 100K | 257 | 0.40 s | 0.16 s | 60% |
 | Nefertiti | 100K | 456 | 0.74 s | 0.40 s | 64% |
@@ -136,6 +142,9 @@ machine is often loaded, so multi-core timings are noisy.
 - Curvature predictors: signed total K works for skipping (|K| > 3, ≥ 1000
   faces); absolute K is useless on scans (noise).
 - faer parallel factorization (`Par::rayon`) for big systems: no gain.
+- Authored seams as a soft segmentation cost do nothing below weight 2:
+  growth only stops at `MAX_COST`, so costs just reorder growth (spot followed
+  10% of UV seams at weight 0–1, 90% at 2). Hence hard cuts in topology.
 - Remaining costs: LSCM solves (successful + failed) dominate; igea's
   critical path is one 98K-face chart that fails and is re-solved in halves.
   Packing ≈ 9 sequential density trials.

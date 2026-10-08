@@ -12,7 +12,7 @@ struct Mesh {
 
 impl Mesh {
     fn input(&self) -> MeshInput<'_> {
-        MeshInput { positions: &self.positions, indices: &self.indices }
+        MeshInput { positions: &self.positions, indices: &self.indices, ..Default::default() }
     }
 }
 
@@ -261,14 +261,119 @@ fn empty_input() {
 #[test]
 fn input_errors() {
     let p = [[0.0f32; 3]; 3];
-    let bad_count = MeshInput { positions: &p, indices: &[0, 1] };
-    let bad_index = MeshInput { positions: &p, indices: &[0, 1, 3] };
+    let bad_count = MeshInput { positions: &p, indices: &[0, 1], ..Default::default() };
+    let bad_index = MeshInput { positions: &p, indices: &[0, 1, 3], ..Default::default() };
     let nan = [[f32::NAN, 0.0, 0.0], [0.0; 3], [0.0; 3]];
-    let bad_pos = MeshInput { positions: &nan, indices: &[0, 1, 2] };
+    let bad_pos = MeshInput { positions: &nan, indices: &[0, 1, 2], ..Default::default() };
     let o = Options::default();
     assert!(matches!(generate(&[bad_count], &o), Err(Error::InvalidIndexCount { .. })));
     assert!(matches!(generate(&[bad_index], &o), Err(Error::IndexOutOfRange { index: 3, .. })));
     assert!(matches!(generate(&[bad_pos], &o), Err(Error::NonFinitePosition { vertex: 0, .. })));
     let bad_opt = Options { max_chart_angle: 95.0, ..o };
     assert!(matches!(generate(&[], &bad_opt), Err(Error::InvalidOption(_))));
+}
+
+/// Faces of `m` whose centroid is right of `x`.
+fn right_of(m: &Mesh, x: f32) -> Vec<bool> {
+    m.indices.chunks_exact(3).map(|t| t.iter().map(|&i| m.positions[i as usize][0]).sum::<f32>() / 3.0 > x).collect()
+}
+
+fn uv_area(out: &uvunwrap::OutputMesh, face: usize) -> f64 {
+    tri_area([0, 1, 2].map(|c| out.vertices[out.indices[face * 3 + c] as usize].uv.map(f64::from)))
+}
+
+fn face_chart(out: &uvunwrap::OutputMesh, face: usize) -> Option<u32> {
+    out.vertices[out.indices[face * 3] as usize].chart
+}
+
+#[test]
+fn authored_seams_become_chart_boundaries() {
+    // A flat plane would be one chart, but its vertices are split down the
+    // middle (x = 1), as an exporter does for a UV seam.
+    let mut m = plane(12);
+    let right = right_of(&m, 1.0);
+    let mut copies = std::collections::HashMap::new();
+    for (f, t) in m.indices.chunks_exact_mut(3).enumerate() {
+        for i in t.iter_mut().filter(|_| right[f]) {
+            if m.positions[*i as usize][0] == 1.0 {
+                *i = *copies.entry(*i).or_insert_with(|| {
+                    m.positions.push(m.positions[*i as usize]);
+                    (m.positions.len() - 1) as u32
+                });
+            }
+        }
+    }
+    let atlas = run(&[&m], &Options::default());
+    assert_eq!(atlas.chart_count, 2);
+    let out = &atlas.meshes[0];
+    for f in 0..right.len() {
+        assert_eq!(face_chart(out, f) == face_chart(out, 0), right[f] == right[0]);
+    }
+}
+
+#[test]
+fn flat_shading_is_not_treated_as_seams() {
+    // Every edge is split; seams carry no information, so the mesh unwraps as
+    // if welded.
+    let welded = torus(16, 8);
+    let soup = Mesh {
+        positions: welded.indices.iter().map(|&i| welded.positions[i as usize]).collect(),
+        indices: (0..welded.indices.len() as u32).collect(),
+    };
+    let a = run(&[&welded], &Options::default());
+    let b = run(&[&soup], &Options::default());
+    assert_eq!(a.chart_count, b.chart_count);
+}
+
+#[test]
+fn charts_never_span_materials() {
+    let m = plane(12);
+    let materials: Vec<u32> = right_of(&m, 1.0).into_iter().map(u32::from).collect();
+    let input = MeshInput { face_materials: Some(&materials), ..m.input() };
+    let atlas = generate(&[input], &Options::default()).unwrap();
+    check(&atlas, &[&m]);
+    assert_eq!(atlas.chart_count, 2);
+    let out = &atlas.meshes[0];
+    for f in 0..materials.len() {
+        assert_eq!(face_chart(out, f) == face_chart(out, 0), materials[f] == materials[0]);
+    }
+}
+
+#[test]
+fn ignored_faces_get_no_uv_space() {
+    let m = plane(12);
+    let ignore = right_of(&m, 1.0);
+    let input = MeshInput { face_ignore: Some(&ignore), ..m.input() };
+    let atlas = generate(&[input], &Options::default()).unwrap();
+    assert_eq!(atlas.chart_count, 1);
+    let out = &atlas.meshes[0];
+    for (f, &ig) in ignore.iter().enumerate() {
+        assert_eq!(uv_area(out, f) == 0.0, ig);
+    }
+    assert!(out.vertices.iter().all(|v| v.uv.iter().all(|c| (0.0..=1.0).contains(c))));
+    assert!(atlas.utilization > 0.8, "utilization {}", atlas.utilization);
+}
+
+#[test]
+fn scale_sets_relative_texel_density() {
+    let m = plane(4);
+    let big = MeshInput { scale: 2.0, ..m.input() };
+    let atlas = generate(&[m.input(), big], &Options::default()).unwrap();
+    check(&atlas, &[&m, &m]);
+    let total = |out: &uvunwrap::OutputMesh| (0..out.indices.len() / 3).map(|f| uv_area(out, f)).sum::<f64>();
+    let ratio = total(&atlas.meshes[1]) / total(&atlas.meshes[0]);
+    assert!((ratio - 4.0).abs() < 1e-3, "area ratio {ratio}");
+}
+
+#[test]
+fn mesh_input_errors() {
+    let m = plane(1);
+    let o = Options::default();
+    let short = [false];
+    let bad_len = MeshInput { face_ignore: Some(&short), ..m.input() };
+    assert!(matches!(generate(&[bad_len], &o), Err(Error::FaceDataLength { len: 1, face_count: 2, .. })));
+    for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        let bad_scale = MeshInput { scale, ..m.input() };
+        assert!(matches!(generate(&[bad_scale], &o), Err(Error::InvalidScale { mesh: 0 })));
+    }
 }

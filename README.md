@@ -10,7 +10,7 @@ builds for wasm and cross-compiles trivially.
 ## Usage
 
 ```rust
-let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices };
+let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices, ..Default::default() };
 let atlas = uvunwrap::generate(&[mesh], &uvunwrap::Options::default())?;
 
 for v in &atlas.meshes[0].vertices {
@@ -21,6 +21,15 @@ for v in &atlas.meshes[0].vertices {
 Output meshes keep the input triangles in order; vertices on chart seams are
 duplicated, and `xref` maps each one back to its input vertex.
 
+Pass meshes as your engine stores them, with vertices split for normals and
+UVs: identical positions are welded, and the split edges (hard edges, UV
+seams) become chart boundaries. Optional per-mesh inputs:
+
+- `face_materials`: charts never span two materials.
+- `face_ignore`: faces that get no UV space.
+- `scale`: mesh-to-world scale, so differently scaled instances share one
+  texel density.
+
 Try it on an OBJ file (writes an OBJ with `vt` coordinates plus an SVG per page):
 
 ```sh
@@ -30,7 +39,9 @@ cargo run --release --example unwrap -- model.obj out/model
 ## How it works
 
 1. **Topology**: welds identical positions, drops triangles too thin for f32
-   UVs, and connects faces only across manifold, consistently oriented edges.
+   UVs (and ignored ones), and connects faces only across manifold,
+   consistently oriented edges within one material that the input doesn't
+   split. Split edges are ignored when most edges are split (flat shading).
 2. **Segmentation**: grows charts from the largest planar regions, xatlas
    style: candidates are ranked by normal deviation (on crease-preserving
    smoothed normals, limited by `max_chart_angle`), with bonuses for filling

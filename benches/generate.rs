@@ -67,7 +67,7 @@ fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("generate");
     group.sample_size(10).warm_up_time(Duration::from_millis(500)).measurement_time(Duration::from_secs(3));
     for m in &meshes {
-        let input = [MeshInput { positions: &m.positions, indices: &m.indices }];
+        let input = [MeshInput { positions: &m.positions, indices: &m.indices, ..Default::default() }];
         for (label, packing) in [("shape", Packing::Shape), ("rect", Packing::Rect)] {
             let opts = Options { packing, ..Options::default() };
             group.bench_with_input(BenchmarkId::new(label, &m.name), &input, |b, input| {

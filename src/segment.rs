@@ -227,11 +227,11 @@ fn cost(reg: &Regions, chart_of: &[u32], c: u32, st: &ChartState, r: usize, cos_
     (c <= MAX_COST).then_some(c)
 }
 
-/// Splits the non-degenerate faces into connected charts whose (smoothed)
+/// Splits the non-excluded faces into connected charts whose (smoothed)
 /// face normals lie within `max_angle` radians of the chart's average normal.
 pub(crate) fn segment(topo: &Topology, max_angle: f64) -> Vec<Vec<u32>> {
     let smooth = smoothed_normals(topo, SMOOTHING_ROUNDS);
-    let all: Vec<u32> = (0..topo.faces.len() as u32).filter(|&f| !topo.degenerate[f as usize]).collect();
+    let all: Vec<u32> = (0..topo.faces.len() as u32).filter(|&f| !topo.excluded[f as usize]).collect();
     segment_regions(topo, &build_regions(topo, &smooth, &all), &all, max_angle)
 }
 

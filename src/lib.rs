@@ -58,7 +58,9 @@ mod par;
 mod param;
 mod progress;
 mod segment;
+mod skyline;
 mod solver;
+mod tile;
 mod topology;
 
 use geom::V2;
@@ -769,7 +771,7 @@ fn pack_meshes(
             direct.extend(geoms[i].iter().copied());
         } else {
             slots.push(Slot::Tiled { tile: tiles.len() });
-            tiles.push(pack::TileSpec {
+            tiles.push(tile::TileSpec {
                 charts: &geoms[i],
                 scales: &scales[i],
             });
@@ -899,7 +901,7 @@ fn place_chart(
 /// The atlas rectangle of each instance of a tiled mesh.
 fn instance_rects(
     m: &MeshInput<'_>,
-    layout: &pack::TileLayout,
+    layout: &tile::TileLayout,
     placements: &[pack::Placement],
     atlas_density: f64,
     pad: f64,

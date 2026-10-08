@@ -112,9 +112,15 @@ is true surface area over atlas area.
 
 ## Status and roadmap
 
-- **Determinism**: cross-platform identical output with the fast direct
-  solver too, and CI comparing output hashes across architectures.
-- **Integrations** (after the above): a Bevy crate.
+Pre-release (0.1 not yet published). Unwrapping, packing, instances, UV
+repacking, progress/cancellation and per-thread-count determinism are in
+place and tested; the API may still change before 0.1.
+
+- **API polish** before 0.1: an explicit auto/fixed density mode, more
+  specific errors, clearer names.
+- **Determinism** across CPU architectures with the fast direct solver too,
+  and CI comparing output hashes across architectures.
+- **Integrations** (after 0.1): a Bevy crate.
 
 ## License
 

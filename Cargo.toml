@@ -2,7 +2,7 @@
 name = "uvunwrap"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.84"
 description = "Pure-Rust automatic UV unwrapping: chart segmentation, LSCM parameterization and atlas packing (lightmap UVs, baking)"
 license = "MIT"
 readme = "README.md"

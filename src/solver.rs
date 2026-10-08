@@ -1,5 +1,8 @@
-//! Sparse least squares via CGLS (conjugate gradient on the normal equations,
-//! without ever forming `AᵀA`).
+//! Sparse least squares for LSCM. With the `direct-solver` feature: a sparse
+//! Cholesky factorization (faer) of the normal equations `AᵀA x = Aᵀb`,
+//! assembled directly in compressed-column form. Otherwise, or if the
+//! factorization fails: CGLS, conjugate gradient on the normal equations
+//! without forming `AᵀA`.
 
 /// Row-compressed sparse matrix.
 pub(crate) struct SparseRows {
@@ -57,7 +60,8 @@ impl SparseRows {
 
 /// Least squares solve of `A x ≈ b`. Uses a sparse Cholesky factorization of
 /// the normal equations when the `direct-solver` feature is on (falling back to
-/// CGLS if factorization fails), else CGLS warm-started from `x`.
+/// CGLS if factorization fails), else CGLS warm-started from `x`. CGLS scales
+/// `a`'s columns in place (Jacobi preconditioning), so `a` must not be reused.
 pub(crate) fn least_squares(a: &mut SparseRows, b: &[f64], x: &mut [f64]) {
     #[cfg(feature = "direct-solver")]
     if cholesky(a, b, x) {
@@ -151,13 +155,13 @@ pub(crate) fn normal_equations(a: &SparseRows, b: &[f64]) -> (LowerCsc, Vec<f64>
     let mut t_row = vec![0u32; a.cols.len()];
     let mut t_val = vec![0.0; a.cols.len()];
     let mut atb = vec![0.0; n];
-    for r in 0..a.nrows() {
+    for (r, &b_r) in b[..a.nrows()].iter().enumerate() {
         for k in a.row_ptr[r]..a.row_ptr[r + 1] {
             let c = a.cols[k] as usize;
             t_row[fill[c]] = r as u32;
             t_val[fill[c]] = a.vals[k];
             fill[c] += 1;
-            atb[c] += a.vals[k] * b[r];
+            atb[c] += a.vals[k] * b_r;
         }
     }
 

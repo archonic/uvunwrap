@@ -92,6 +92,8 @@ use case.
   `OutputVertex`, `Error`) and output assembly (seam vertex duplication,
   `xref` back to input vertices, degenerate/ignored faces collapsed onto one
   existing UV).
+- `src/geom.rs`: f64 vector helpers, convex hull, min-area rectangle, triangle
+  overlap, and deterministic `cos`/`angle` (no platform math anywhere).
 - `src/topology.rs`: welding by exact position (scaled by `MeshInput::scale`),
   exclusion (degenerate: altitude < 1e-6 × bbox diagonal, or ignored),
   manifold + consistently oriented adjacency within one material only. Edges
@@ -212,10 +214,18 @@ a slowdown is real, compare both builds with
 
 ## Next steps (priority order)
 
-1. CI (tests in both feature configs, wasm32 build, example output hashes
-   compared across x86-64/ARM/wasm32 without `direct-solver`), then publish
-   0.1 to crates.io; refresh `docs/atlases.png` (still shows the old
-   rect-packed atlases).
-2. Deterministic direct solver (own sparse Cholesky), if cross-platform
+1. API polish before 0.1: explicit auto/fixed density mode (replacing the
+   overloaded `resolution: 0`), specific errors (which option, which array,
+   which instance), renames (`instances` → `instance_scales`, `uvs` →
+   `existing_uvs`, `face_ignore` → `ignored_faces`), UV convention docs.
+2. Internals: split `run` and `pack` into per-step/per-mode functions,
+   parallelize across meshes, remove duplication (parallel/serial helper,
+   bounding boxes, `round_up`).
+3. Packaging and CI: `repository`/`documentation` metadata, `include` list,
+   absolute README image URL; CI with tests in both feature configs, `cargo
+   fmt --check`, clippy `-D warnings`, a wasm32 build, and example output
+   hashes compared across x86-64/ARM/wasm32 without `direct-solver`. Then
+   publish 0.1.
+4. Deterministic direct solver (own sparse Cholesky), if cross-platform
    determinism must hold with the fast path.
-3. Bevy integration crate.
+5. Bevy integration crate.

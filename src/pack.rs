@@ -108,7 +108,7 @@ impl Skyline {
                 continue;
             }
             let score = ((y as u64 + h as u64) << 32) | x as u64;
-            if best.map_or(true, |b| score < b.0) {
+            if best.is_none_or(|b| score < b.0) {
                 best = Some((score, i, x, y));
             }
         }
@@ -498,7 +498,7 @@ fn best_fit(page: &Page, masks: &ChartMasks) -> Option<(u32, u32, u8)> {
         let limit = best.map_or(u64::MAX, |b| b.0);
         if let Some((x, y)) = page.find(m, limit) {
             let top = y as u64 + m.h as u64;
-            if best.map_or(true, |b| top < b.0) {
+            if best.is_none_or(|b| top < b.0) {
                 best = Some((top, x, y, k as u8));
             }
         }

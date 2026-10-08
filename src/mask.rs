@@ -183,7 +183,7 @@ struct Bits {
 
 impl Bits {
     fn new(w: u32, h: u32) -> Bits {
-        let words = (w as usize + 63) / 64;
+        let words = (w as usize).div_ceil(64);
         Bits {
             w,
             h,
@@ -399,7 +399,7 @@ impl Page {
         Page {
             w,
             max_h,
-            words: (w as usize + 63) / 64,
+            words: (w as usize).div_ceil(64),
             data: Vec::new(),
             free_run: Vec::new(),
             runs: Vec::new(),

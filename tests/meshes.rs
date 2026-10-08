@@ -666,4 +666,98 @@ fn input_uvs_are_normalized_mirrored_or_replaced() {
     let short = [[0.0f32; 2]; 3];
     let bad = MeshInput { uvs: Some(&short), ..m.input() };
     assert!(matches!(generate(&[bad], &Options::default()), Err(Error::UvCount { len: 3, .. })));
+    let mut nan = mirrored.clone();
+    nan[5] = [f32::NAN, 0.0];
+    let bad = MeshInput { uvs: Some(&nan), ..m.input() };
+    assert!(matches!(generate(&[bad], &Options::default()), Err(Error::NonFiniteUv { vertex: 5, .. })));
+    // -0.0 and 0.0 are the same UV: the split plane's seam copies carry -0.0
+    // where the originals carry 0.0, and it is still one island.
+    let split = split_plane();
+    let originals = plane(12).positions.len();
+    let signed: Vec<[f32; 2]> =
+        split.positions.iter().enumerate().map(|(i, p)| [if i >= originals { -(p[0] - 1.0) } else { p[0] - 1.0 }, p[1]]).collect();
+    assert_eq!(run_uvs(&split, &signed).chart_count, 1);
+}
+
+/// Every instance of every mesh plus the plain meshes, mapped into atlas
+/// space and checked together.
+fn check_with_instances(atlas: &Atlas, meshes: &[&Mesh]) {
+    let mut expanded = atlas.clone();
+    expanded.meshes.clear();
+    let mut inputs = Vec::new();
+    for (out, &m) in atlas.meshes.iter().zip(meshes) {
+        if out.instances.is_empty() {
+            expanded.meshes.push(out.clone());
+            inputs.push(m);
+        }
+        for i in 0..out.instances.len() {
+            expanded.meshes.push(instance_mesh(out, i));
+            inputs.push(m);
+        }
+    }
+    check(&expanded, &inputs);
+}
+
+#[test]
+fn instance_layouts_respect_the_page() {
+    let c = cube();
+    let opts = |tpu| Options { texels_per_unit: Some(tpu), resolution: 128, ..Options::default() };
+    let atlas = generate(&[MeshInput { instances: &[1.0, 0.5], ..c.input() }], &opts(12.0)).unwrap();
+    check_with_instances(&atlas, &[&c]);
+    // At 20 texels/unit the six 44-texel faces can't share one 128 rectangle
+    // (the plain cube only fits by spreading over two pages). The error must
+    // report the most compact layout, not a 44 x 264 column.
+    let result = generate(&[MeshInput { instances: &[1.0], ..c.input() }], &opts(20.0));
+    let Err(Error::ChartTooLarge { width, height, .. }) = result else { panic!("{result:?}") };
+    assert!(width.max(height) <= 140, "{width} x {height}");
+}
+
+#[test]
+fn instance_scale_ratios_fit_or_fail_cleanly() {
+    let t = torus(32, 16);
+    // A 10x ratio wastes space (the largest instance gets 10x the padding) but
+    // fits.
+    let atlas = generate(&[MeshInput { instances: &[1.0, 0.1], ..t.input() }], &Options::default()).unwrap();
+    check_with_instances(&atlas, &[&t]);
+    // At 10^4 the largest instance's padding alone exceeds the page.
+    let start = std::time::Instant::now();
+    let result = generate(&[MeshInput { instances: &[1.0, 1e-4], ..t.input() }], &Options::default());
+    assert!(matches!(result, Err(Error::ChartTooLarge { .. })), "{result:?}");
+    assert!(start.elapsed().as_secs_f64() < 2.0, "took {:?}", start.elapsed());
+}
+
+#[test]
+fn max_chart_size_applies_to_instances() {
+    let t = torus(32, 16);
+    let opts = Options { texels_per_unit: Some(100.0), resolution: 0, max_chart_size: 16, ..Options::default() };
+    let atlas = generate(&[MeshInput { instances: &[1.0, 2.0], ..t.input() }], &opts).unwrap();
+    check_with_instances(&atlas, &[&t]);
+    let out = &atlas.meshes[0];
+    for i in 0..out.instances.len() {
+        let m = instance_mesh(out, i);
+        let mut extent: std::collections::HashMap<u32, ([f32; 2], [f32; 2])> = std::collections::HashMap::new();
+        for v in &m.vertices {
+            let p = [v.uv[0] * atlas.width as f32, v.uv[1] * atlas.height as f32];
+            let e = extent.entry(v.chart.unwrap()).or_insert((p, p));
+            for k in 0..2 {
+                e.0[k] = e.0[k].min(p[k]);
+                e.1[k] = e.1[k].max(p[k]);
+            }
+        }
+        for (chart, (lo, hi)) in extent {
+            let side = (hi[0] - lo[0]).max(hi[1] - lo[1]);
+            assert!(side <= 16.01, "instance {i} chart {chart}: {side} texels");
+        }
+    }
+}
+
+#[test]
+fn absurd_density_or_padding_errors_instead_of_allocating() {
+    let m = plane(1);
+    let dense = Options { texels_per_unit: Some(1e6), resolution: 0, ..Options::default() };
+    assert!(matches!(generate(&[m.input()], &dense), Err(Error::AtlasTooLarge { .. })));
+    let paged = Options { texels_per_unit: Some(1e6), resolution: 1024, ..Options::default() };
+    assert!(matches!(generate(&[m.input()], &paged), Err(Error::ChartTooLarge { .. })));
+    let padded = Options { texels_per_unit: Some(1.0), resolution: 0, padding: u32::MAX / 2, ..Options::default() };
+    assert!(matches!(generate(&[m.input()], &padded), Err(Error::AtlasTooLarge { .. })));
 }

@@ -239,7 +239,7 @@ pub(crate) struct ChartMasks {
 /// its padded mask and derives the requested rotations from it.
 pub(crate) fn chart_masks(uvs: &[V2], tris: &[[u32; 3]], size: V2, s: f64, padding: u32, rotations: u8) -> ChartMasks {
     let (cw, ch) = content_size(size, s);
-    let (w, h) = (cw + 2 * padding, ch + 2 * padding);
+    let (w, h) = (cw.saturating_add(padding.saturating_mul(2)), ch.saturating_add(padding.saturating_mul(2)));
     let mut bits = Bits::new(w, h);
     let off = padding as f64;
     // Grow each triangle slightly so f32 rounding of the final UVs can never

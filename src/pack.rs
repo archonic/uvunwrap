@@ -48,6 +48,9 @@ pub(crate) struct TileLayout {
     /// Texels per unit of the layout: the atlas density at the smallest
     /// instance scale, so every instance gets at least the full padding.
     pub density: f64,
+    /// Largest chart side in layout texels (0: no limit), so no chart exceeds
+    /// `max_chart_size` in the largest instance.
+    pub chart_limit: u32,
     /// Size of the layout's content box (inside the outer padding), in chart
     /// units at scale 1. An instance of scale `k` occupies `inner * k * s`
     /// texels at atlas density `s`.
@@ -194,6 +197,10 @@ pub(crate) struct Packer<'a> {
     pub ctx: &'a Ctx<'a>,
 }
 
+/// Most texels (padded item area) a pack may rasterize: 2^30, a 32K × 32K
+/// atlas.
+const MAX_TEXELS: u64 = 1 << 30;
+
 /// Placements (charts, then instances) plus the used `(width, height)` of
 /// each page.
 type Trial = (Vec<Placement>, Vec<(u32, u32)>);
@@ -211,39 +218,69 @@ struct Prepared {
 }
 
 impl Packer<'_> {
-    /// Lays out a tile's charts at the density of its smallest instance.
-    fn layout_tile(&self, t: &TileSpec<'_>, s: f64) -> TileLayout {
+    /// Lays out a tile's charts at the density of its smallest instance, so
+    /// that its largest instance fits within `page` texels if possible.
+    fn layout_tile(&self, t: &TileSpec<'_>, s: f64, page: Option<u32>) -> Result<TileLayout, Error> {
         let k_min = t.scales.iter().copied().fold(f64::INFINITY, f64::min);
+        let k_max = t.scales.iter().copied().fold(0.0, f64::max);
         let density = s * k_min;
+        let pad = 2 * self.padding;
+        // Instance `k` is the layout scaled by `k / k_min`, padding included:
+        // limit the layout (and its charts) so the largest instance fits.
+        let shrink = |texels: u32| ((texels as f64 * k_min / k_max).floor() as u32).max(1);
+        let chart_limit = if self.max_chart_size == 0 { 0 } else { shrink(self.max_chart_size) };
+        let cap = page.map_or(u32::MAX, |p| shrink(p.saturating_sub(pad)).saturating_add(pad));
         // Nested packing is neither reported nor cancelled; the trials
         // around it are.
-        let sub = Packer { charts: t.charts, tiles: &[], max_chart_size: 0, block: 1, ctx: &QUIET, ..*self };
-        let r = pack(&sub, Some(density), 0).expect("an unbounded page always fits");
-        let pad = 2 * self.padding;
+        let sub = Packer { charts: t.charts, tiles: &[], max_chart_size: chart_limit, block: 1, ctx: &QUIET, ..*self };
+        let r = pack_unbounded(&sub, density, cap)?;
         let inner = [r.width.saturating_sub(pad) as f64 / density, r.height.saturating_sub(pad) as f64 / density];
-        TileLayout { placements: r.placements, density, inner }
+        Ok(TileLayout { placements: r.placements, density, chart_limit, inner })
     }
 
-    fn prepare(&self, s: f64) -> Prepared {
-        let tiles: Vec<TileLayout> = self.tiles.iter().map(|t| self.layout_tile(t, s)).collect();
+    /// Sizes (and tile layouts) of everything to place at density `s`, for
+    /// pages of `page` texels if bounded. Masks are rasterized separately
+    /// ([`Packer::rasterize`]), once the sizes are known to be reasonable.
+    fn prepare(&self, s: f64, page: Option<u32>) -> Result<Prepared, Error> {
+        let tiles = self.tiles.iter().map(|t| self.layout_tile(t, s, page)).collect::<Result<Vec<_>, _>>()?;
         let pad = 2 * self.padding;
         let b = self.block;
         let padded = |(w, h): (u32, u32)| (round_up(w.saturating_add(pad), b), round_up(h.saturating_add(pad), b));
         let mut sizes: Vec<(u32, u32)> =
             self.charts.iter().map(|c| padded(content_size(c.size, chart_density(c.size, s, self.max_chart_size)))).collect();
         let mut rotatable = vec![self.allow_rotation; sizes.len()];
-        let mut masks = if self.method == Packing::Shape { self.masks(s) } else { Vec::new() };
         for (t, layout) in self.tiles.iter().zip(&tiles) {
             for &k in t.scales {
-                let (w, h) = padded(content_size(layout.inner, k * s));
-                sizes.push((w, h));
+                sizes.push(padded(content_size(layout.inner, k * s)));
                 rotatable.push(false);
-                if self.method == Packing::Shape {
-                    masks.push(ChartMasks { rot: vec![Mask::rect(w / b, h / b)] });
-                }
             }
         }
-        Prepared { sizes, rotatable, masks, tiles }
+        Ok(Prepared { sizes, rotatable, masks: Vec::new(), tiles })
+    }
+
+    /// Fails if the items' total area is beyond what can reasonably be
+    /// rasterized (a density far too high for the meshes).
+    fn check_budget(prep: &Prepared) -> Result<(), Error> {
+        let texels: u64 = prep.sizes.iter().map(|&(w, h)| w as u64 * h as u64).sum();
+        if texels > MAX_TEXELS {
+            return Err(Error::AtlasTooLarge { texels });
+        }
+        Ok(())
+    }
+
+    /// The largest item, if any doesn't fit a `page × page` page.
+    fn oversized(prep: &Prepared, page: u32) -> Option<(u32, u32)> {
+        prep.sizes.iter().copied().filter(|&(w, h)| w.max(h) > page).max_by_key(|&(w, h)| w.max(h))
+    }
+
+    /// Rasterizes the masks for shape packing.
+    fn rasterize(&self, prep: &mut Prepared, s: f64) {
+        if self.method != Packing::Shape || !prep.masks.is_empty() {
+            return;
+        }
+        let b = self.block;
+        prep.masks = self.masks(s);
+        prep.masks.extend(prep.sizes[self.charts.len()..].iter().map(|&(w, h)| ChartMasks { rot: vec![Mask::rect(w / b, h / b)] }));
     }
 
     /// Chart masks in blocks.
@@ -386,56 +423,35 @@ pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32
         let s = texels_per_unit.unwrap_or(1.0);
         let items = p.charts.len() + p.tiles.iter().map(|t| t.scales.len()).sum::<usize>();
         let trial = (vec![Placement::default(); items], Vec::new());
-        return Ok(p.finish(p.prepare(s), trial, res, res, u32::from(items > 0), s));
+        return Ok(p.finish(p.prepare(s, None)?, trial, res, res, u32::from(items > 0), s));
     }
 
     match (texels_per_unit, resolution) {
-        // Fixed density, unbounded single page: try a few near-square widths
-        // and keep the smallest page (packing is cheap next to rasterizing).
+        // Fixed density, unbounded single page.
         (Some(s), 0) => {
             p.ctx.advance(Stage::Packing, 1, 0)?;
-            let prep = p.prepare(s);
-            let r = &prep.sizes;
-            let bbox: f64 = r.iter().map(|&(w, h)| w as f64 * h as f64).sum();
-            let fill = if p.method == Packing::Shape { 0.8 } else { 1.15 };
-            let max_side = r.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(1);
-            let one = |k: usize| {
-                let side = (bbox * fill).sqrt() * (0.85 + 0.05 * k as f64);
-                let width = round_up(max_side.max(side.ceil() as u32), p.block);
-                let (placements, used) = p.place(&prep, width, u32::MAX, 1).expect("unbounded page always fits");
-                (used[0].0 as u64 * used[0].1 as u64, k, placements, used[0])
-            };
-            #[cfg(feature = "parallel")]
-            let trials: Vec<_> = {
-                use rayon::prelude::*;
-                (0..7).into_par_iter().map(one).collect()
-            };
-            #[cfg(not(feature = "parallel"))]
-            let trials: Vec<_> = (0..7).map(one).collect();
-            let (_, _, placements, used) = trials.into_iter().min_by_key(|t| (t.0, t.1)).expect("seven trials");
-            Ok(p.finish(prep, (placements, Vec::new()), used.0.max(1), used.1.max(1), 1, s))
+            pack_unbounded(p, s, u32::MAX)
         }
         // Fixed density, fixed page size: as many pages as needed.
         (Some(s), res) => {
             p.ctx.advance(Stage::Packing, 1, 0)?;
-            let prep = p.prepare(s);
-            if let Some(&(w, h)) = prep.sizes.iter().find(|&&(w, h)| w.max(h) > res) {
-                return Err(Error::ChartTooLarge { width: w, height: h, resolution: res });
-            }
-            let trial = p
-                .place(&prep, res, res, usize::MAX)
-                .ok_or(Error::ChartTooLarge { width: res + 1, height: res + 1, resolution: res })?;
-            let pages = trial.1.len() as u32;
-            Ok(p.finish(prep, trial, res, res, pages, s))
+            pack_pages(p, s, res)
         }
         // Automatic density: the largest density that fits a single page.
         (None, res) => {
             let res = if res == 0 { 1024 } else { res };
-            let fits = |s: f64| {
-                let prep = p.prepare(s);
-                let trial = p.place(&prep, res, res, 1)?;
-                let used = trial.1[0].1;
-                Some((prep, trial, s, used))
+            // `Ok(None)`: doesn't fit one page at density `s`.
+            let fits = |s: f64| -> Result<_, Error> {
+                let mut prep = p.prepare(s, Some(res))?;
+                if Packer::oversized(&prep, res).is_some() {
+                    return Ok(None);
+                }
+                Packer::check_budget(&prep)?;
+                p.rasterize(&mut prep, s);
+                Ok(p.place(&prep, res, res, 1).map(|trial| {
+                    let used = trial.1[0].1;
+                    (prep, trial, s, used)
+                }))
             };
             let tile_bbox = |t: &TileSpec| t.charts.iter().map(|c| c.size[0] * c.size[1]).sum::<f64>() * t.scales.iter().map(|k| k * k).sum::<f64>();
             let bbox: f64 = p.charts.iter().map(|c| c.size[0] * c.size[1]).sum::<f64>() + p.tiles.iter().map(tile_bbox).sum::<f64>();
@@ -455,7 +471,7 @@ pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32
                 hi = (full / area).sqrt();
                 while lo > 0.0 {
                     p.ctx.advance(Stage::Packing, 1, 0)?;
-                    match fits(lo) {
+                    match fits(lo)? {
                         Some(b) => {
                             best = Some(b);
                             break;
@@ -474,7 +490,7 @@ pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32
                 }
                 let mid = if lo > 0.0 { (lo * hi).sqrt() } else { 0.5 * hi };
                 p.ctx.advance(Stage::Packing, 1, 0)?;
-                match fits(mid) {
+                match fits(mid)? {
                     Some(b) => {
                         lo = mid;
                         best = Some(b);
@@ -485,14 +501,67 @@ pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32
             match best {
                 // Crop the page to the rows actually used.
                 Some((prep, trial, s, used)) => Ok(p.finish(prep, trial, res, used.max(1), 1, s)),
-                // Too many charts for one page even at minimal density.
+                // Too many charts for one page: several pages, at a density
+                // low enough that every item fits a page.
                 None => {
-                    let s = 0.5 * (full / bbox).sqrt();
-                    pack(p, Some(s), res)
+                    let mut s = 0.5 * (full / bbox).sqrt();
+                    for _ in 0..64 {
+                        match pack_pages(p, s, res) {
+                            Err(Error::ChartTooLarge { .. }) => s *= 0.5,
+                            result => return result,
+                        }
+                    }
+                    pack_pages(p, s, res)
                 }
             }
         }
     }
+}
+
+/// Fixed density `s` on one page that grows to fit: tries a few near-square
+/// widths (at most `cap`) and keeps the smallest page within `cap × cap`, or
+/// failing that the one with the shortest longer side.
+fn pack_unbounded(p: &Packer<'_>, s: f64, cap: u32) -> Result<PackResult, Error> {
+    let mut prep = p.prepare(s, None)?;
+    Packer::check_budget(&prep)?;
+    p.rasterize(&mut prep, s);
+    let r = &prep.sizes;
+    let bbox: f64 = r.iter().map(|&(w, h)| w as f64 * h as f64).sum();
+    let fill = if p.method == Packing::Shape { 0.8 } else { 1.15 };
+    let max_side = r.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(1);
+    let one = |k: usize| {
+        // Seven widths around the estimate, plus the cap itself.
+        let side = if k == 7 { cap as f64 } else { (bbox * fill).sqrt() * (0.85 + 0.05 * k as f64) };
+        let width = round_up(max_side.max((side.ceil() as u32).min(cap)), p.block);
+        let (placements, used) = p.place(&prep, width, u32::MAX, 1).expect("an unbounded page always fits");
+        let side = used[0].0.max(used[0].1);
+        let over = side > cap;
+        let size = if over { side as u64 } else { used[0].0 as u64 * used[0].1 as u64 };
+        ((over, size, k), placements, used[0])
+    };
+    let widths = if cap == u32::MAX { 7 } else { 8 };
+    #[cfg(feature = "parallel")]
+    let trials: Vec<_> = {
+        use rayon::prelude::*;
+        (0..widths).into_par_iter().map(one).collect()
+    };
+    #[cfg(not(feature = "parallel"))]
+    let trials: Vec<_> = (0..widths).map(one).collect();
+    let (_, placements, used) = trials.into_iter().min_by_key(|t| t.0).expect("at least seven trials");
+    Ok(p.finish(prep, (placements, Vec::new()), used.0.max(1), used.1.max(1), 1, s))
+}
+
+/// Fixed density `s` on as many `res × res` pages as needed.
+fn pack_pages(p: &Packer<'_>, s: f64, res: u32) -> Result<PackResult, Error> {
+    let mut prep = p.prepare(s, Some(res))?;
+    if let Some((width, height)) = Packer::oversized(&prep, res) {
+        return Err(Error::ChartTooLarge { width, height, resolution: res });
+    }
+    Packer::check_budget(&prep)?;
+    p.rasterize(&mut prep, s);
+    let trial = p.place(&prep, res, res, usize::MAX).expect("every item fits an empty page");
+    let pages = trial.1.len() as u32;
+    Ok(p.finish(prep, trial, res, res, pages, s))
 }
 
 #[cfg(test)]

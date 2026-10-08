@@ -99,6 +99,11 @@ pub struct MeshInput<'a> {
     /// scale ([`OutputMesh::instances`]). This is how engines lightmap meshes
     /// drawn several times (e.g. Bevy's `Lightmap::uv_rect`), and with a single
     /// instance it keeps a mesh on one page. Each must be finite and `> 0`.
+    ///
+    /// All instances share one layout, padded for the smallest instance, so
+    /// an instance `n` times larger gets `n` times the padding: keep scales
+    /// within a small range (split very different ones into separate meshes).
+    /// [`Options::max_chart_size`] applies to every instance.
     pub instances: &'a [f32],
     /// Optional existing texture coordinates (one per vertex) to repack
     /// instead of unwrapping from scratch: each UV island (faces connected
@@ -274,6 +279,13 @@ pub enum Error {
         /// Vertex index.
         vertex: usize,
     },
+    /// A vertex of [`MeshInput::uvs`] contains NaN or infinity.
+    NonFiniteUv {
+        /// Mesh position in the input slice.
+        mesh: usize,
+        /// Vertex index.
+        vertex: usize,
+    },
     /// A per-face array doesn't have one entry per triangle.
     FaceDataLength {
         /// Mesh position in the input slice.
@@ -299,9 +311,18 @@ pub enum Error {
     },
     /// An option is out of range.
     InvalidOption(&'static str),
+    /// The texel density is far too high for the meshes: the atlas would
+    /// exceed 2^30 texels.
+    AtlasTooLarge {
+        /// Padded texel area of everything to pack.
+        texels: u64,
+    },
     /// The progress callback of [`generate_with_progress`] returned `false`.
     Cancelled,
-    /// With a fixed texel density, a chart doesn't fit in a page.
+    /// A chart (or instance) doesn't fit in a page: with a fixed texel
+    /// density, or in automatic mode when even very low densities don't help
+    /// (padding alone is too large, e.g. instances whose scales differ by far
+    /// more than the page size over the padding).
     ChartTooLarge {
         /// Padded chart width in texels.
         width: u32,
@@ -324,6 +345,9 @@ impl fmt::Display for Error {
             Error::NonFinitePosition { mesh, vertex } => {
                 write!(f, "mesh {mesh}: vertex {vertex} has a non-finite position")
             }
+            Error::NonFiniteUv { mesh, vertex } => {
+                write!(f, "mesh {mesh}: vertex {vertex} has a non-finite uv")
+            }
             Error::FaceDataLength { mesh, len, face_count } => {
                 write!(f, "mesh {mesh}: per-face data has {len} entries for {face_count} triangles")
             }
@@ -332,6 +356,7 @@ impl fmt::Display for Error {
             }
             Error::InvalidScale { mesh } => write!(f, "mesh {mesh}: scale must be finite and > 0"),
             Error::InvalidOption(msg) => write!(f, "invalid option: {msg}"),
+            Error::AtlasTooLarge { texels } => write!(f, "atlas would need {texels} texels; lower texels_per_unit"),
             Error::Cancelled => write!(f, "cancelled"),
             Error::ChartTooLarge { width, height, resolution } => write!(
                 f,
@@ -379,8 +404,13 @@ fn validate_mesh(mi: usize, m: &MeshInput<'_>) -> Result<(), Error> {
     if let Some(len) = lens.into_iter().flatten().find(|&l| l != face_count) {
         return Err(Error::FaceDataLength { mesh: mi, len, face_count });
     }
-    if let Some(uvs) = m.uvs.filter(|u| u.len() != m.positions.len()) {
-        return Err(Error::UvCount { mesh: mi, len: uvs.len(), vertex_count: m.positions.len() });
+    if let Some(uvs) = m.uvs {
+        if uvs.len() != m.positions.len() {
+            return Err(Error::UvCount { mesh: mi, len: uvs.len(), vertex_count: m.positions.len() });
+        }
+        if let Some(vertex) = uvs.iter().position(|p| p.iter().any(|c| !c.is_finite())) {
+            return Err(Error::NonFiniteUv { mesh: mi, vertex });
+        }
     }
     if !(m.scale > 0.0 && m.scale.is_finite()) || m.instances.iter().any(|k| !(*k > 0.0 && k.is_finite())) {
         return Err(Error::InvalidScale { mesh: mi });
@@ -507,10 +537,12 @@ fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, 
                     (packed.placements[direct_base + ci], s, [0.0, 0.0], [pw, ph])
                 }
                 Some((layout, _)) => {
-                    covered += ch.area * m.instances.iter().map(|&k| (k as f64 * s).powi(2)).sum::<f64>();
                     let d = layout.density;
+                    let cd = pack::chart_density(ch.size, d, layout.chart_limit);
+                    // Instance `k` shows the layout scaled by `k * s / d`.
+                    covered += ch.area * m.instances.iter().map(|&k| (cd * k as f64 * s / d) * (cd * k as f64 * s / d)).sum::<f64>();
                     let extent = [layout.inner[0] * d, layout.inner[1] * d].map(|e| e.max(f64::MIN_POSITIVE));
-                    (layout.placements[ci], d, [pad, pad], extent)
+                    (layout.placements[ci], cd, [pad, pad], extent)
                 }
             };
             for (k, &f) in ch.faces.iter().enumerate() {

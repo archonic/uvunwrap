@@ -77,7 +77,8 @@ fn island(job: &Job, faces: Vec<u32>, face_uvs: &[[V2; 3]]) -> Vec<Chart> {
             let w = job.topo.faces[f as usize];
             [0, 1, 2].map(|c| {
                 let uv = face_uvs[f as usize][c];
-                *map.entry((w[c], uv.map(f64::to_bits))).or_insert_with(|| {
+                // `+ 0.0` turns -0.0 into 0.0, so both key the same vertex.
+                *map.entry((w[c], uv.map(|x| (x + 0.0).to_bits()))).or_insert_with(|| {
                     verts.push(w[c]);
                     uvs.push(uv);
                     (verts.len() - 1) as u32

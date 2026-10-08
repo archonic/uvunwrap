@@ -156,7 +156,7 @@ impl Job<'_> {
         // A cancellation is noticed by the caller.
         let _ = self
             .ctx
-            .advance(Stage::Parameterizing, faces.len(), self.total);
+            .advance(Stage::Parameterizing, faces.len(), Some(self.total));
         vec![finalize(topo, faces, verts, local, uvs)]
     }
 }

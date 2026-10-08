@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 /// A pipeline stage, in the order they run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Stage {
     /// Welding and chart segmentation; counts meshes.
     Segmenting,
@@ -19,14 +20,14 @@ pub enum Stage {
 
 /// A progress report passed to the callback of
 /// [`generate_with_progress`](crate::generate_with_progress).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Progress {
     /// Current stage.
     pub stage: Stage,
     /// Units of work finished in this stage.
     pub done: usize,
-    /// Units of work in this stage, or `0` if unknown (packing).
-    pub total: usize,
+    /// Units of work in this stage, if known (not for packing).
+    pub total: Option<usize>,
 }
 
 /// A context that reports nothing and is never cancelled.
@@ -51,7 +52,7 @@ impl<'a> Ctx<'a> {
 
     /// Adds `by` units to `stage` (resetting the count when the stage changes)
     /// and reports. Calls are serialized, so counts never go backwards.
-    pub fn advance(&self, stage: Stage, by: usize, total: usize) -> Result<(), Error> {
+    pub fn advance(&self, stage: Stage, by: usize, total: Option<usize>) -> Result<(), Error> {
         let Some(callback) = self.callback else {
             return Ok(());
         };

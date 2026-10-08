@@ -48,19 +48,19 @@ fn progress_reports_every_stage_in_order() {
     let faces = (a.indices.len() + b.indices.len()) / 3;
     assert_eq!(
         (last(Stage::Segmenting).done, last(Stage::Segmenting).total),
-        (2, 2)
+        (2, Some(2))
     );
     assert_eq!(
         (
             last(Stage::Parameterizing).done,
             last(Stage::Parameterizing).total
         ),
-        (faces, faces)
+        (faces, Some(faces))
     );
-    assert!(last(Stage::Packing).done >= 1 && last(Stage::Packing).total == 0);
+    assert!(last(Stage::Packing).done >= 1 && last(Stage::Packing).total.is_none());
     assert_eq!(
         (last(Stage::Output).done, last(Stage::Output).total),
-        (2, 2)
+        (2, Some(2))
     );
 }
 

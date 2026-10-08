@@ -590,17 +590,16 @@ pub(crate) fn pack(
     match (texels_per_unit, resolution) {
         // Fixed density, unbounded single page.
         (Some(s), 0) => {
-            p.ctx.advance(Stage::Packing, 1, 0)?;
+            p.ctx.advance(Stage::Packing, 1, None)?;
             pack_unbounded(p, s, u32::MAX)
         }
         // Fixed density, fixed page size: as many pages as needed.
         (Some(s), res) => {
-            p.ctx.advance(Stage::Packing, 1, 0)?;
+            p.ctx.advance(Stage::Packing, 1, None)?;
             pack_pages(p, s, res)
         }
         // Automatic density: the largest density that fits a single page.
         (None, res) => {
-            let res = if res == 0 { 1024 } else { res };
             // `Ok(None)`: doesn't fit one page at density `s`.
             let fits = |s: f64| -> Result<_, Error> {
                 let mut prep = p.prepare(s, Some(res))?;
@@ -638,7 +637,7 @@ pub(crate) fn pack(
                 };
                 hi = (full / area).sqrt();
                 while lo > 0.0 {
-                    p.ctx.advance(Stage::Packing, 1, 0)?;
+                    p.ctx.advance(Stage::Packing, 1, None)?;
                     match fits(lo)? {
                         Some(b) => {
                             best = Some(b);
@@ -657,7 +656,7 @@ pub(crate) fn pack(
                     break;
                 }
                 let mid = if lo > 0.0 { (lo * hi).sqrt() } else { 0.5 * hi };
-                p.ctx.advance(Stage::Packing, 1, 0)?;
+                p.ctx.advance(Stage::Packing, 1, None)?;
                 match fits(mid)? {
                     Some(b) => {
                         lo = mid;
@@ -750,7 +749,7 @@ fn pack_pages(p: &Packer<'_>, s: f64, res: u32) -> Result<PackResult, Error> {
         return Err(Error::ChartTooLarge {
             width,
             height,
-            resolution: res,
+            page_size: res,
         });
     }
     Packer::check_budget(&prep)?;

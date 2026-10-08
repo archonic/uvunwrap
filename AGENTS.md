@@ -32,11 +32,11 @@ Crate goals (✅ done, ◐ partial, ☐ missing):
 3. ✅ **Respect authored structure.** Edges where the input splits vertices
    (hard edges, UV seams) are chart boundaries, which covers xatlas's
    normal/texture seam weights without passing normals or UVs. Also
-   `face_materials` and `face_ignore`.
+   `face_materials` and `ignored_faces`.
 4. ✅ **Fixed or automatic density**, one growing page or fixed-size pages,
    page size reported; per-mesh `scale` for scaled instances.
 5. ✅ **Multi-mesh atlases and instances.** `generate` packs many meshes
-   into shared pages. `MeshInput::instances` unwraps a mesh once into its own
+   into shared pages. `MeshInput::instance_scales` unwraps a mesh once into its own
    layout (UVs in [0,1]) and gives each instance an unrotated rectangle on one
    page (`OutputMesh::instances`), which is Bevy's `Lightmap::uv_rect`; one
    instance keeps a mesh on one page.
@@ -63,7 +63,7 @@ Crate goals (✅ done, ◐ partial, ☐ missing):
     (meshes, faces, packing trials, meshes) and cancels when the callback
     returns `false`. Latency is one in-flight chart solve (igea: ~0.13 s).
 11. ✅ **Repack existing UVs** (xatlas `AddUvMesh`, but better for
-    lightmaps): `MeshInput::uvs` makes each UV island one chart, scaled to
+    lightmaps): `MeshInput::existing_uvs` makes each UV island one chart, scaled to
     its 3D area (xatlas keeps UV scale) and rotated freely; mirrored islands
     are flipped, invalid ones (flips, degenerate, self-overlap) unwrapped
     normally. Spot: 14 charts, 70% utilization, half the time.
@@ -87,9 +87,11 @@ use case.
 
 ## Layout
 
-- `src/lib.rs`: public API (`generate`, `MeshInput` with optional
-  `face_materials`/`face_ignore`/`scale`, `Options`, `Atlas`, `OutputMesh`,
-  `OutputVertex`, `Error`) and output assembly (seam vertex duplication,
+- `src/lib.rs`: public API (`generate`/`generate_with_progress`,
+  `MeshInput::new` plus optional `face_materials`/`ignored_faces`/`scale`/
+  `instance_scales`/`existing_uvs`, `Options` with `Density::{Auto, Fixed}`,
+  `Atlas`, `OutputMesh`, `OutputVertex` (`page: Option`), `InstanceRect`,
+  `Error` naming the offending option/array/instance) and output assembly (seam vertex duplication,
   `xref` back to input vertices, degenerate/ignored faces collapsed onto one
   existing UV).
 - `src/geom.rs`: f64 vector helpers, convex hull, min-area rectangle, triangle
@@ -214,18 +216,14 @@ a slowdown is real, compare both builds with
 
 ## Next steps (priority order)
 
-1. API polish before 0.1: explicit auto/fixed density mode (replacing the
-   overloaded `resolution: 0`), specific errors (which option, which array,
-   which instance), renames (`instances` → `instance_scales`, `uvs` →
-   `existing_uvs`, `face_ignore` → `ignored_faces`), UV convention docs.
-2. Internals: split `run` and `pack` into per-step/per-mode functions,
+1. Internals: split `run` and `pack` into per-step/per-mode functions,
    parallelize across meshes, remove duplication (parallel/serial helper,
    bounding boxes, `round_up`).
-3. Packaging and CI: `repository`/`documentation` metadata, `include` list,
+2. Packaging and CI: `repository`/`documentation` metadata, `include` list,
    absolute README image URL; CI with tests in both feature configs, `cargo
    fmt --check`, clippy `-D warnings`, a wasm32 build, and example output
    hashes compared across x86-64/ARM/wasm32 without `direct-solver`. Then
    publish 0.1.
-4. Deterministic direct solver (own sparse Cholesky), if cross-platform
+3. Deterministic direct solver (own sparse Cholesky), if cross-platform
    determinism must hold with the fast path.
-5. Bevy integration crate.
+4. Bevy integration crate.

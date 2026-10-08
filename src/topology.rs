@@ -97,7 +97,7 @@ impl Topology {
                 || f[0] == f[2]
                 || !(len > 0.0)
                 || !(len / longest > min_altitude);
-            let skip = degen || mesh.face_ignore.is_some_and(|ig| ig[fi]);
+            let skip = degen || mesh.ignored_faces.is_some_and(|ig| ig[fi]);
             faces.push(f);
             normals.push(if skip { [0.0; 3] } else { scale3(n, 1.0 / len) });
             areas.push(if skip { 0.0 } else { area });
@@ -124,7 +124,7 @@ impl Topology {
         let corner = |f: u32, c: usize| indices[f as usize * 3 + c % 3];
         // Whether two input vertices at the same position are split: by their
         // UVs if given (UV seams), else by being different vertices.
-        let differ = |a: u32, b: u32| match mesh.uvs {
+        let differ = |a: u32, b: u32| match mesh.existing_uvs {
             Some(uv) => uv[a as usize] != uv[b as usize],
             None => a != b,
         };
@@ -157,7 +157,7 @@ impl Topology {
                 }
             }
         }
-        if mesh.uvs.is_some() || split.len() * 2 <= joined {
+        if mesh.existing_uvs.is_some() || split.len() * 2 <= joined {
             for (f, e) in split.into_iter().flatten() {
                 neighbors[f as usize][e] = NONE;
             }

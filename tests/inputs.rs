@@ -58,7 +58,7 @@ fn ignored_faces_get_no_uv_space() {
     let ignore = right_of(&m, 1.0);
     let atlas = run_inputs(
         &[MeshInput {
-            face_ignore: Some(&ignore),
+            ignored_faces: Some(&ignore),
             ..m.input()
         }],
         &Options::default(),
@@ -87,7 +87,7 @@ fn scale_sets_relative_texel_density() {
 fn run_uvs(m: &Mesh, uvs: &[[f32; 2]]) -> Atlas {
     run_inputs(
         &[MeshInput {
-            uvs: Some(uvs),
+            existing_uvs: Some(uvs),
             ..m.input()
         }],
         &Options::default(),
@@ -131,11 +131,11 @@ fn input_uvs_are_normalized_mirrored_or_replaced() {
     let both = run_inputs(
         &[
             MeshInput {
-                uvs: Some(&small),
+                existing_uvs: Some(&small),
                 ..m.input()
             },
             MeshInput {
-                uvs: Some(&big),
+                existing_uvs: Some(&big),
                 ..m.input()
             },
         ],
@@ -183,27 +183,55 @@ fn input_errors() {
     let o = Options::default();
     let short = [false];
     let bad_len = MeshInput {
-        face_ignore: Some(&short),
+        ignored_faces: Some(&short),
         ..m.input()
     };
     assert!(matches!(
         generate(&[bad_len], &o),
         Err(Error::FaceDataLength {
+            field: "ignored_faces",
             len: 1,
             face_count: 2,
             ..
         })
     ));
+    let materials = [0u32; 3];
+    let bad_len = MeshInput {
+        face_materials: Some(&materials),
+        ..m.input()
+    };
+    assert!(matches!(
+        generate(&[bad_len], &o),
+        Err(Error::FaceDataLength {
+            field: "face_materials",
+            len: 3,
+            ..
+        })
+    ));
     for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
         let bad_scale = MeshInput { scale, ..m.input() };
-        assert!(matches!(
+        assert_eq!(
             generate(&[bad_scale], &o),
-            Err(Error::InvalidScale { mesh: 0 })
-        ));
+            Err(Error::InvalidScale {
+                mesh: 0,
+                instance: None
+            })
+        );
+        let bad_instance = MeshInput {
+            instance_scales: &[1.0, scale],
+            ..m.input()
+        };
+        assert_eq!(
+            generate(&[m.input(), bad_instance], &o),
+            Err(Error::InvalidScale {
+                mesh: 1,
+                instance: Some(1)
+            })
+        );
     }
     let short_uvs = [[0.0f32; 2]; 3];
     let bad = MeshInput {
-        uvs: Some(&short_uvs),
+        existing_uvs: Some(&short_uvs),
         ..m.input()
     };
     assert!(matches!(
@@ -213,7 +241,7 @@ fn input_errors() {
     let mut nan = vec![[0.0f32; 2]; m.positions.len()];
     nan[2] = [f32::NAN, 0.0];
     let bad = MeshInput {
-        uvs: Some(&nan),
+        existing_uvs: Some(&nan),
         ..m.input()
     };
     assert!(matches!(

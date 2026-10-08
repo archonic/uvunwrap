@@ -136,7 +136,7 @@ fn input_errors() {
     };
     assert!(matches!(
         generate(&[], &bad_opt),
-        Err(Error::InvalidOption(_))
+        Err(Error::InvalidOption { .. })
     ));
 }
 
@@ -149,19 +149,23 @@ fn output_is_deterministic() {
         a.input(),
         b.input(),
         MeshInput {
-            instances: &[1.0, 1.5],
+            instance_scales: &[1.0, 1.5],
             ..c.input()
         },
     ];
     let fixed = Options {
-        texels_per_unit: Some(40.0),
-        resolution: 0,
+        density: Density::Fixed {
+            texels_per_unit: 40.0,
+            page_size: None,
+        },
         ..Options::default()
     };
     let rect = Options {
         packing: Packing::Rect,
-        texels_per_unit: Some(40.0),
-        resolution: 512,
+        density: Density::Fixed {
+            texels_per_unit: 40.0,
+            page_size: Some(512),
+        },
         ..Options::default()
     };
     for opts in [Options::default(), fixed, rect] {

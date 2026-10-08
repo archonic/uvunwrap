@@ -12,7 +12,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::time::Duration;
-use uvunwrap::{generate, MeshInput, Options, Packing};
+use uvunwrap::{generate, Density, MeshInput, Options, Packing};
 
 struct Mesh {
     name: String,
@@ -176,8 +176,10 @@ fn bench(c: &mut Criterion) {
         .measurement_time(Duration::from_secs(3));
     for m in &meshes {
         let fixed = Options {
-            texels_per_unit: Some(m.density()),
-            resolution: 0,
+            density: Density::Fixed {
+                texels_per_unit: m.density(),
+                page_size: None,
+            },
             ..Options::default()
         };
         let cases = [
@@ -194,7 +196,7 @@ fn bench(c: &mut Criterion) {
             (
                 "instances",
                 [MeshInput {
-                    instances: &[1.0, 1.0, 0.5, 2.0],
+                    instance_scales: &[1.0, 1.0, 0.5, 2.0],
                     ..m.input()
                 }],
                 Options::default(),
@@ -207,7 +209,7 @@ fn bench(c: &mut Criterion) {
         }
         if let Some(uvs) = &m.uvs {
             let input = [MeshInput {
-                uvs: Some(uvs),
+                existing_uvs: Some(uvs),
                 ..m.input()
             }];
             group.bench_with_input(BenchmarkId::new("repack", &m.name), &input, |b, input| {

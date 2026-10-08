@@ -17,7 +17,9 @@
 
 use std::f32::consts::TAU;
 #[allow(unused_imports)]
-pub use uvunwrap::{generate, Atlas, Error, InstanceRect, MeshInput, Options, OutputMesh, Packing};
+pub use uvunwrap::{
+    generate, Atlas, Density, Error, InstanceRect, MeshInput, Options, OutputMesh, Packing,
+};
 
 pub struct Mesh {
     pub positions: Vec<[f32; 3]>,
@@ -215,7 +217,7 @@ pub fn instance_mesh(out: &OutputMesh, i: usize) -> OutputMesh {
     let mut m = out.clone();
     for v in &mut m.vertices {
         v.uv = [0, 1].map(|k| r.min[k] + v.uv[k] * (r.max[k] - r.min[k]));
-        v.page = r.page;
+        v.page = v.chart.map(|_| r.page);
     }
     m.instances.clear();
     m
@@ -364,7 +366,7 @@ pub fn check(atlas: &Atlas, inputs: &[MeshInput], opts: &Options) {
                 "topology changed"
             );
         }
-        assert_eq!(out.instances.len(), input.instances.len());
+        assert_eq!(out.instances.len(), input.instance_scales.len());
         // Faces the crate may leave uncharted or collapse: degenerate ones
         // (altitude below 1e-6 of the mesh size, as in topology.rs, with
         // margin) and ones too thin for f32 UVs.
@@ -383,7 +385,7 @@ pub fn check(atlas: &Atlas, inputs: &[MeshInput], opts: &Options) {
                         .map(|k| (r.min[k] + v.uv[k] * (r.max[k] - r.min[k])) as f64 * dims[k]),
                 };
                 let tri = vs.map(|v| uv(&v));
-                if input.face_ignore.is_some_and(|ig| ig[f]) {
+                if input.ignored_faces.is_some_and(|ig| ig[f]) {
                     assert_eq!(tri_area(tri), 0.0, "ignored face {f} has UV area");
                     continue;
                 }
@@ -392,15 +394,28 @@ pub fn check(atlas: &Atlas, inputs: &[MeshInput], opts: &Options) {
                     continue;
                 }
                 let chart = vs[0].chart.expect("charted face");
-                let page = view.map_or(vs[0].page, |r| r.page);
                 assert!(
                     vs.iter().all(|v| v.chart == Some(chart)),
                     "face {f} spans charts"
                 );
-                assert!(
-                    view.is_some() || vs.iter().all(|v| v.page == page),
-                    "face {f} spans pages"
-                );
+                // Vertices of instanced meshes have no page of their own.
+                let page = match view {
+                    Some(r) => {
+                        assert!(
+                            vs.iter().all(|v| v.page.is_none()),
+                            "face {f}: instanced vertex with a page"
+                        );
+                        r.page
+                    }
+                    None => {
+                        let page = vs[0].page.expect("charted vertex without a page");
+                        assert!(
+                            vs.iter().all(|v| v.page == Some(page)),
+                            "face {f} spans pages"
+                        );
+                        page
+                    }
+                };
                 assert!(page < atlas.page_count.max(1));
                 let area = tri_area(tri);
                 if area == 0.0 && alt <= 1e-5 * diag {

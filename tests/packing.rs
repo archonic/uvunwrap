@@ -7,8 +7,10 @@ use common::*;
 fn fixed_texel_density() {
     let m = plane(4); // 2 x 1 units
     let opts = Options {
-        texels_per_unit: Some(64.0),
-        resolution: 0,
+        density: Density::Fixed {
+            texels_per_unit: 64.0,
+            page_size: None,
+        },
         padding: 1,
         ..Options::default()
     };
@@ -26,8 +28,10 @@ fn fixed_texel_density() {
 fn fixed_density_spills_onto_pages() {
     let m = cube();
     let opts = Options {
-        texels_per_unit: Some(30.0),
-        resolution: 64,
+        density: Density::Fixed {
+            texels_per_unit: 30.0,
+            page_size: Some(64),
+        },
         padding: 1,
         ..Options::default()
     };
@@ -39,8 +43,10 @@ fn fixed_density_spills_onto_pages() {
 fn chart_too_large() {
     let m = plane(2);
     let opts = Options {
-        texels_per_unit: Some(1000.0),
-        resolution: 64,
+        density: Density::Fixed {
+            texels_per_unit: 1000.0,
+            page_size: Some(64),
+        },
         ..Options::default()
     };
     assert!(matches!(
@@ -57,8 +63,10 @@ fn max_chart_size_scales_down_big_charts_only() {
         ..small.input()
     };
     let opts = Options {
-        texels_per_unit: Some(64.0),
-        resolution: 0,
+        density: Density::Fixed {
+            texels_per_unit: 64.0,
+            page_size: None,
+        },
         padding: 1,
         max_chart_size: 32,
         ..Options::default()
@@ -106,15 +114,17 @@ fn block_align_gives_each_chart_its_own_blocks() {
             Options {
                 block_align: true,
                 padding: 0,
-                resolution: 256,
+                density: Density::Auto { page_size: 256 },
                 packing,
                 ..Options::default()
             },
             Options {
                 block_align: true,
                 padding: 1,
-                texels_per_unit: Some(40.0),
-                resolution: 0,
+                density: Density::Fixed {
+                    texels_per_unit: 40.0,
+                    page_size: None,
+                },
                 packing,
                 ..Options::default()
             },
@@ -156,8 +166,10 @@ fn block_align_gives_each_chart_its_own_blocks() {
 fn absurd_density_or_padding_errors_instead_of_allocating() {
     let m = plane(1);
     let dense = Options {
-        texels_per_unit: Some(1e6),
-        resolution: 0,
+        density: Density::Fixed {
+            texels_per_unit: 1e6,
+            page_size: None,
+        },
         ..Options::default()
     };
     assert!(matches!(
@@ -165,8 +177,10 @@ fn absurd_density_or_padding_errors_instead_of_allocating() {
         Err(Error::AtlasTooLarge { .. })
     ));
     let paged = Options {
-        texels_per_unit: Some(1e6),
-        resolution: 1024,
+        density: Density::Fixed {
+            texels_per_unit: 1e6,
+            page_size: Some(1024),
+        },
         ..Options::default()
     };
     assert!(matches!(
@@ -174,8 +188,10 @@ fn absurd_density_or_padding_errors_instead_of_allocating() {
         Err(Error::ChartTooLarge { .. })
     ));
     let padded = Options {
-        texels_per_unit: Some(1.0),
-        resolution: 0,
+        density: Density::Fixed {
+            texels_per_unit: 1.0,
+            page_size: None,
+        },
         padding: u32::MAX / 2,
         ..Options::default()
     };
@@ -189,18 +205,26 @@ fn absurd_density_or_padding_errors_instead_of_allocating() {
 fn every_packer_configuration_is_valid() {
     // `check` covers overlaps, padding (including 0) and page edges.
     let (a, b, c) = (torus(32, 16), cube(), sphere(24, 12));
+    let densities = [
+        Density::Auto { page_size: 256 },
+        Density::Fixed {
+            texels_per_unit: 30.0,
+            page_size: None,
+        },
+        Density::Fixed {
+            texels_per_unit: 30.0,
+            page_size: Some(128),
+        },
+    ];
     for packing in [Packing::Shape, Packing::Rect] {
         for allow_rotation in [true, false] {
             for padding in [0, 1, 3] {
-                for (texels_per_unit, resolution) in
-                    [(None, 256), (Some(30.0), 0), (Some(30.0), 128)]
-                {
+                for density in densities {
                     let opts = Options {
                         packing,
                         allow_rotation,
                         padding,
-                        texels_per_unit,
-                        resolution,
+                        density,
                         ..Options::default()
                     };
                     run(&[&a, &b, &c], &opts);
@@ -211,47 +235,89 @@ fn every_packer_configuration_is_valid() {
 }
 
 #[test]
-fn invalid_options() {
+fn invalid_options_name_the_option() {
     let o = Options::default();
-    for bad in [
-        Options {
-            max_chart_angle: 0.0,
-            ..o.clone()
-        },
-        Options {
-            max_chart_angle: 95.0,
-            ..o.clone()
-        },
-        Options {
-            max_area_distortion: 0.5,
-            ..o.clone()
-        },
-        Options {
-            max_area_distortion: f32::NAN,
-            ..o.clone()
-        },
-        Options {
-            texels_per_unit: Some(0.0),
-            ..o.clone()
-        },
-        Options {
-            texels_per_unit: Some(f32::INFINITY),
-            ..o.clone()
-        },
-        Options {
-            padding: 512,
-            resolution: 1024,
-            ..o.clone()
-        },
-        Options {
-            block_align: true,
-            resolution: 1022,
-            ..o.clone()
-        },
+    let fixed = |texels_per_unit, page_size| Density::Fixed {
+        texels_per_unit,
+        page_size,
+    };
+    for (bad, name) in [
+        (
+            Options {
+                max_chart_angle: 0.0,
+                ..o
+            },
+            "max_chart_angle",
+        ),
+        (
+            Options {
+                max_chart_angle: 95.0,
+                ..o
+            },
+            "max_chart_angle",
+        ),
+        (
+            Options {
+                max_area_distortion: 0.5,
+                ..o
+            },
+            "max_area_distortion",
+        ),
+        (
+            Options {
+                max_area_distortion: f32::NAN,
+                ..o
+            },
+            "max_area_distortion",
+        ),
+        (
+            Options {
+                density: fixed(0.0, None),
+                ..o
+            },
+            "density.texels_per_unit",
+        ),
+        (
+            Options {
+                density: fixed(f32::INFINITY, None),
+                ..o
+            },
+            "density.texels_per_unit",
+        ),
+        (
+            Options {
+                density: fixed(10.0, Some(0)),
+                ..o
+            },
+            "density.page_size",
+        ),
+        (
+            Options {
+                density: Density::Auto { page_size: 0 },
+                ..o
+            },
+            "density.page_size",
+        ),
+        (
+            Options {
+                padding: 512,
+                density: Density::Auto { page_size: 1024 },
+                ..o
+            },
+            "density.page_size",
+        ),
+        (
+            Options {
+                block_align: true,
+                density: Density::Auto { page_size: 1022 },
+                ..o
+            },
+            "density.page_size",
+        ),
     ] {
-        assert!(
-            matches!(generate(&[], &bad), Err(Error::InvalidOption(_))),
-            "{bad:?}"
-        );
+        match generate(&[], &bad) {
+            Err(Error::InvalidOption { option, .. }) => assert_eq!(option, name, "{bad:?}"),
+            other => panic!("{bad:?}: {other:?}"),
+        }
     }
 }

@@ -10,17 +10,27 @@ builds for wasm and cross-compiles trivially.
 ## Usage
 
 ```rust
-let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices, ..Default::default() };
-let atlas = uvunwrap::generate(&[mesh], &uvunwrap::Options::default())?;
+use uvunwrap::{generate, Density, MeshInput, Options};
+
+let mesh = MeshInput::new(&positions, &indices);
+let atlas = generate(&[mesh], &Options::default())?;
 
 for v in &atlas.meshes[0].vertices {
     // v.xref: original vertex index, v.uv: [0, 1] coordinate, v.page: atlas page
 }
+
+// Engines usually want a fixed texel density (5 texels per unit here), on a
+// page that grows to fit or on as many fixed-size pages as needed:
+let options = Options {
+    density: Density::Fixed { texels_per_unit: 5.0, page_size: None },
+    ..Options::default()
+};
 ```
 
-`generate_with_progress` takes a callback that receives the current stage and
-done/total counts and can return `false` to cancel, for running large unwraps
-as background tasks.
+`Density::Auto { page_size }` (the default, 1024) picks the highest density
+that fits one page. `generate_with_progress` takes a callback that receives
+the current stage and progress counts and can return `false` to cancel, for
+running large unwraps as background tasks.
 
 Output meshes keep the input triangles in order; vertices on chart seams are
 duplicated, and `xref` maps each one back to its input vertex.
@@ -30,15 +40,15 @@ UVs: identical positions are welded, and the split edges (hard edges, UV
 seams) become chart boundaries. Optional per-mesh inputs:
 
 - `face_materials`: charts never span two materials.
-- `face_ignore`: faces that get no UV space.
+- `ignored_faces`: faces that get no UV space.
 - `scale`: mesh-to-world scale, so differently scaled instances share one
   texel density.
-- `instances`: one scale per instance of a mesh drawn several times. The mesh
+- `instance_scales`: one scale per instance of a mesh drawn several times. The mesh
   is unwrapped once (its UVs cover `[0, 1]`) and each instance gets its own
   rectangle in the atlas (`OutputMesh::instances`), the way engines lightmap
   shared meshes (e.g. Bevy's `Lightmap::uv_rect`). With one instance this
   also keeps a mesh on a single page.
-- `uvs`: existing UVs to repack instead of unwrapping: each UV island
+- `existing_uvs`: existing UVs to repack instead of unwrapping: each UV island
   becomes one chart, rescaled to its surface area for uniform texel density.
   Mirrored islands are flipped; unusable ones are unwrapped normally.
 

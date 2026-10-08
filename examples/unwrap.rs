@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! cargo run --release --example unwrap -- [--rect] [--flat] [--block-align]
-//!     [--texels-per-unit X] [--max-chart-size N] [--padding N] [--resolution N]
+//!     [--texels-per-unit X] [--max-chart-size N] [--padding N] [--page-size N]
 //!     [--instances 1,2,0.5] [--keep-uvs] [input.obj] [output_prefix]
 //! ```
 //!
@@ -144,10 +144,8 @@ fn main() {
         args.remove(i);
         Some(args.remove(i))
     };
-    if let Some(v) = value("--texels-per-unit") {
-        opts.texels_per_unit = Some(v.parse().expect("--texels-per-unit"));
-        opts.resolution = 0;
-    }
+    let texels_per_unit: Option<f32> =
+        value("--texels-per-unit").map(|v| v.parse().expect("--texels-per-unit"));
     if let Some(v) = value("--max-chart-size") {
         opts.max_chart_size = v.parse().expect("--max-chart-size");
     }
@@ -158,9 +156,16 @@ fn main() {
                 .collect()
         })
         .unwrap_or_default();
-    if let Some(v) = value("--resolution") {
-        opts.resolution = v.parse().expect("--resolution");
-    }
+    let page_size: Option<u32> = value("--page-size").map(|v| v.parse().expect("--page-size"));
+    opts.density = match texels_per_unit {
+        Some(texels_per_unit) => uvunwrap::Density::Fixed {
+            texels_per_unit,
+            page_size,
+        },
+        None => uvunwrap::Density::Auto {
+            page_size: page_size.unwrap_or(1024),
+        },
+    };
     if let Some(v) = value("--padding") {
         opts.padding = v.parse().expect("--padding");
     }
@@ -193,11 +198,9 @@ fn main() {
 
     let start = Instant::now();
     let mesh = uvunwrap::MeshInput {
-        positions: &positions,
-        indices: &indices,
-        instances: &instances,
-        uvs: uvs.as_deref(),
-        ..Default::default()
+        instance_scales: &instances,
+        existing_uvs: uvs.as_deref(),
+        ..uvunwrap::MeshInput::new(&positions, &indices)
     };
     let atlas = uvunwrap::generate(&[mesh], &opts).expect("unwrap failed");
     let elapsed = start.elapsed();
@@ -228,7 +231,7 @@ fn main() {
             v.uv[0].to_bits(),
             v.uv[1].to_bits(),
             v.chart.unwrap_or(u32::MAX),
-            v.page,
+            v.page.unwrap_or(0),
         ]
         .into_iter()
         .for_each(&mut feed);
@@ -270,8 +273,8 @@ fn main() {
             for t in out.indices.chunks_exact(3) {
                 let vs = [0, 1, 2].map(|k| out.vertices[t[k] as usize]);
                 let Some(chart) = vs[0].chart else { continue };
-                let on_page = view.map_or(vs[0].page, |r| r.page);
-                if on_page != page {
+                let on_page = view.map_or(vs[0].page, |r| Some(r.page));
+                if on_page != Some(page) {
                     continue;
                 }
                 let uv = |uv: [f32; 2]| match view {

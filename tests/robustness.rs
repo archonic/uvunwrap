@@ -101,7 +101,7 @@ fn slivers_and_degenerate_meshes() {
     let all = vec![true; m.faces()];
     let atlas = run_inputs(
         &[MeshInput {
-            face_ignore: Some(&all),
+            ignored_faces: Some(&all),
             ..m.input()
         }],
         &Options::default(),
@@ -174,12 +174,14 @@ fn random_options(rng: &mut Rng) -> Options {
         } else {
             Packing::Rect
         },
-        texels_per_unit: fixed.then(|| rng.range(4.0, 40.0)),
-        // Auto mode needs a page; block alignment needs a multiple of 4.
-        resolution: if !fixed && resolution == 0 {
-            256
-        } else {
-            resolution
+        density: match fixed.then(|| rng.range(4.0, 40.0)) {
+            Some(texels_per_unit) => Density::Fixed {
+                texels_per_unit,
+                page_size: (resolution > 0).then_some(resolution),
+            },
+            None => Density::Auto {
+                page_size: if resolution == 0 { 256 } else { resolution },
+            },
         },
         max_chart_size: if rng.below(4) == 0 {
             8 + rng.below(32) as u32
@@ -211,7 +213,7 @@ fn random_meshes_and_options() {
             .iter()
             .zip(&scales)
             .map(|(m, k)| MeshInput {
-                instances: k,
+                instance_scales: k,
                 ..m.input()
             })
             .collect();
@@ -220,7 +222,13 @@ fn random_meshes_and_options() {
             Ok(atlas) => check(&atlas, &inputs, &opts),
             // Fixed density can legitimately be too high for the page.
             Err(Error::ChartTooLarge { .. })
-                if opts.texels_per_unit.is_some() && opts.resolution > 0 => {}
+                if matches!(
+                    opts.density,
+                    Density::Fixed {
+                        page_size: Some(_),
+                        ..
+                    }
+                ) => {}
             Err(e) => panic!("seed {seed}: {e:?} with {opts:?}"),
         }
     }

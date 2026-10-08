@@ -11,8 +11,10 @@ fn instances_get_their_own_rectangles() {
     for opts in [
         Options::default(),
         Options {
-            texels_per_unit: Some(12.0),
-            resolution: 192,
+            density: Density::Fixed {
+                texels_per_unit: 12.0,
+                page_size: Some(192),
+            },
             ..Options::default()
         },
         Options {
@@ -23,12 +25,12 @@ fn instances_get_their_own_rectangles() {
     ] {
         let inputs = [
             MeshInput {
-                instances: &scales,
+                instance_scales: &scales,
                 ..t.input()
             },
             c.input(),
             MeshInput {
-                instances: &one,
+                instance_scales: &one,
                 ..c.input()
             },
         ];
@@ -78,17 +80,23 @@ fn instances_get_their_own_rectangles() {
                 "instance {i}: {w}x{h} vs {base:?}"
             );
         }
-        if opts.resolution == 192 {
+        if matches!(
+            opts.density,
+            Density::Fixed {
+                page_size: Some(192),
+                ..
+            }
+        ) {
             assert!(atlas.page_count > 1, "expected several pages");
         }
     }
     let bad = MeshInput {
-        instances: &[1.0, 0.0],
+        instance_scales: &[1.0, 0.0],
         ..c.input()
     };
     assert!(matches!(
         generate(&[bad], &Options::default()),
-        Err(Error::InvalidScale { mesh: 0 })
+        Err(Error::InvalidScale { mesh: 0, .. })
     ));
 }
 
@@ -96,13 +104,15 @@ fn instances_get_their_own_rectangles() {
 fn instance_layouts_respect_the_page() {
     let c = cube();
     let opts = |tpu| Options {
-        texels_per_unit: Some(tpu),
-        resolution: 128,
+        density: Density::Fixed {
+            texels_per_unit: tpu,
+            page_size: Some(128),
+        },
         ..Options::default()
     };
     run_inputs(
         &[MeshInput {
-            instances: &[1.0, 0.5],
+            instance_scales: &[1.0, 0.5],
             ..c.input()
         }],
         &opts(12.0),
@@ -112,7 +122,7 @@ fn instance_layouts_respect_the_page() {
     // report the most compact layout, not a 44 x 264 column.
     let result = generate(
         &[MeshInput {
-            instances: &[1.0],
+            instance_scales: &[1.0],
             ..c.input()
         }],
         &opts(20.0),
@@ -130,7 +140,7 @@ fn instance_scale_ratios_fit_or_fail_cleanly() {
     // fits.
     run_inputs(
         &[MeshInput {
-            instances: &[1.0, 0.1],
+            instance_scales: &[1.0, 0.1],
             ..t.input()
         }],
         &Options::default(),
@@ -139,7 +149,7 @@ fn instance_scale_ratios_fit_or_fail_cleanly() {
     let start = std::time::Instant::now();
     let result = generate(
         &[MeshInput {
-            instances: &[1.0, 1e-4],
+            instance_scales: &[1.0, 1e-4],
             ..t.input()
         }],
         &Options::default(),
@@ -159,14 +169,16 @@ fn instance_scale_ratios_fit_or_fail_cleanly() {
 fn max_chart_size_applies_to_instances() {
     let t = torus(32, 16);
     let opts = Options {
-        texels_per_unit: Some(100.0),
-        resolution: 0,
+        density: Density::Fixed {
+            texels_per_unit: 100.0,
+            page_size: None,
+        },
         max_chart_size: 16,
         ..Options::default()
     };
     let atlas = run_inputs(
         &[MeshInput {
-            instances: &[1.0, 2.0],
+            instance_scales: &[1.0, 2.0],
             ..t.input()
         }],
         &opts,
@@ -201,8 +213,8 @@ fn instances_of_repacked_uvs() {
         .collect();
     let atlas = run_inputs(
         &[MeshInput {
-            uvs: Some(&uvs),
-            instances: &[1.0, 0.5],
+            existing_uvs: Some(&uvs),
+            instance_scales: &[1.0, 0.5],
             ..m.input()
         }],
         &Options::default(),

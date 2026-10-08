@@ -130,12 +130,19 @@ use case.
   are `TileSpec`s: each trial lays out the tile's charts (a sub-`pack` at the
   smallest instance's density) and adds one unrotatable rectangle per
   instance (`Mask::rect`) to the items being packed.
-- `tests/meshes.rs`: plane, cube, sphere, torus, cylinder, soup, degenerates,
-  errors; checks topology preservation, UV range, no flips, no overlaps.
+- `tests/`: `common/mod.rs` holds generators and `check`, which verifies
+  every output guarantee (topology, positive UV area, no overlaps, 2×padding
+  between charts and instances, padding to page edges, ignored faces
+  collapsed; sweep-and-prune, so large meshes are fine). Topic files:
+  `unwrap`, `inputs`, `packing`, `instances`, `progress`, `robustness`
+  (hostile inputs and a seeded random mesh/options property test).
 - `examples/unwrap.rs`: OBJ in (one vertex per `v/vt/vn` corner, like an
   engine import; `--flat` splits every face) → OBJ with `vt` + SVG per page.
-- `benches/generate.rs`: criterion (`cargo bench`), procedural meshes plus
-  `models/{spot,beetle,bunny,armadillo,nefertiti}.obj` when present.
+- `benches/generate.rs`: criterion (`cargo bench`; `-- --test` runs each case
+  once): tori and a 2000-triangle soup plus
+  `models/{spot,beetle,bunny,armadillo,nefertiti}.obj` when present, each
+  with shape, rect, fixed density and four instances, plus `repack` for
+  models with UVs.
 
 ## Commands
 

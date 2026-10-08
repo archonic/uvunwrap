@@ -162,6 +162,13 @@ pub(crate) struct Packer<'a> {
 /// Placements plus the used `(width, height)` of each page.
 type Trial = (Vec<Placement>, Vec<(u32, u32)>);
 
+/// Charts rasterized at one density, ready to place: rectangles or masks, in
+/// block units.
+enum Prepared {
+    Rects(Vec<(u32, u32)>),
+    Masks(Vec<ChartMasks>),
+}
+
 impl Packer<'_> {
     /// Padded chart rectangles in texels, rounded up to whole blocks.
     fn rects(&self, s: f64) -> Vec<(u32, u32)> {
@@ -198,19 +205,29 @@ impl Packer<'_> {
         }
     }
 
+    fn prepare(&self, s: f64) -> Prepared {
+        match self.method {
+            Packing::Rect => Prepared::Rects(self.rects(s).iter().map(|&(w, h)| (w / self.block, h / self.block)).collect()),
+            Packing::Shape => Prepared::Masks(self.masks(s)),
+        }
+    }
+
     /// Packs at density `s` into pages of `width × height` texels, using at
     /// most `max_pages`. `None` if it doesn't fit.
     fn trial(&self, s: f64, width: u32, height: u32, max_pages: usize) -> Option<Trial> {
+        self.place(&self.prepare(s), width, height, max_pages)
+    }
+
+    fn place(&self, prep: &Prepared, width: u32, height: u32, max_pages: usize) -> Option<Trial> {
         // Pack in block units, then scale back to texels.
         let b = self.block;
         let (bw, bh) = (width / b, if height == u32::MAX { u32::MAX } else { height / b });
-        let (mut placements, mut used) = match self.method {
-            Packing::Rect => {
-                let r: Vec<(u32, u32)> = self.rects(s).iter().map(|&(w, h)| (w / b, h / b)).collect();
-                let (placements, pages) = try_pack(&r, bw, bh, max_pages, self.allow_rotation)?;
+        let (mut placements, mut used) = match prep {
+            Prepared::Rects(r) => {
+                let (placements, pages) = try_pack(r, bw, bh, max_pages, self.allow_rotation)?;
                 (placements, pages.iter().map(|p| (p.width, p.used_height)).collect::<Vec<_>>())
             }
-            Packing::Shape => shape_pack(&self.masks(s), bw, bh, max_pages)?,
+            Prepared::Masks(m) => shape_pack(m, bw, bh, max_pages)?,
         };
         if b > 1 {
             for p in &mut placements {
@@ -315,16 +332,29 @@ pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32
     }
 
     match (texels_per_unit, resolution) {
-        // Fixed density, unbounded single page: pick a near-square width.
+        // Fixed density, unbounded single page: try a few near-square widths
+        // and keep the smallest page (packing is cheap next to rasterizing).
         (Some(s), 0) => {
             let r = p.rects(s);
             let bbox: f64 = r.iter().map(|&(w, h)| w as f64 * h as f64).sum();
             let fill = if p.method == Packing::Shape { 0.8 } else { 1.15 };
             let max_side = r.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(1);
-            let width = max_side.max((bbox * fill).sqrt().ceil() as u32);
-            let width = round_up(width, p.block);
-            let (placements, used) = p.trial(s, width, u32::MAX, 1).expect("unbounded page always fits");
-            Ok(PackResult { placements, width: used[0].0.max(1), height: used[0].1.max(1), pages: 1, texels_per_unit: s })
+            let prep = p.prepare(s);
+            let one = |k: usize| {
+                let side = (bbox * fill).sqrt() * (0.85 + 0.05 * k as f64);
+                let width = round_up(max_side.max(side.ceil() as u32), p.block);
+                let (placements, used) = p.place(&prep, width, u32::MAX, 1).expect("unbounded page always fits");
+                (used[0].0 as u64 * used[0].1 as u64, k, placements, used[0])
+            };
+            #[cfg(feature = "parallel")]
+            let trials: Vec<_> = {
+                use rayon::prelude::*;
+                (0..7).into_par_iter().map(one).collect()
+            };
+            #[cfg(not(feature = "parallel"))]
+            let trials: Vec<_> = (0..7).map(one).collect();
+            let (_, _, placements, used) = trials.into_iter().min_by_key(|t| (t.0, t.1)).expect("seven trials");
+            Ok(PackResult { placements, width: used.0.max(1), height: used.1.max(1), pages: 1, texels_per_unit: s })
         }
         // Fixed density, fixed page size: as many pages as needed.
         (Some(s), res) => {

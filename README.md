@@ -102,7 +102,6 @@ is true surface area over atlas area.
 
 - **Determinism**: cross-platform identical output with the fast direct
   solver too, and CI comparing output hashes across architectures.
-- **Fixed-density packing**: better utilization on small atlases.
 - **Multi-mesh**: one page per mesh, per-mesh bounds; progress and
   cancellation; repacking existing UVs.
 - **Integrations** (after the above): a Bevy crate.

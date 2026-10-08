@@ -109,7 +109,8 @@ use case.
 - `src/pack.rs`: `Packing::Shape` (masks, default) or `Packing::Rect`
   (skyline); auto density (bisection to fit one page, seeded by the rect
   result, cropped to used height), fixed density (single growing page or
-  multiple fixed pages). Per-chart density (`chart_density`) applies
+  multiple fixed pages; the growing page tries 7 widths in parallel on one
+  set of masks and keeps the smallest area). Per-chart density (`chart_density`) applies
   `max_chart_size`; `block_align` packs in 4×4 block units (`Mask::downsample`,
   rects rounded up) and scales placements back to texels.
 - `tests/meshes.rs`: plane, cube, sphere, torus, cylinder, soup, degenerates,
@@ -163,6 +164,11 @@ machine is often loaded, so multi-core timings are noisy.
 - Curvature predictors: signed total K works for skipping (|K| > 3, ≥ 1000
   faces); absolute K is useless on scans (noise).
 - faer parallel factorization (`Par::rayon`) for big systems: no gain.
+- Low utilization on small atlases is padding, not the packer: padding 2
+  around 58 charts on a ~150 px page costs ~20 points (xatlas pads the same
+  way: 8-neighbour dilation on both charts, plus a bilinear border by
+  default). At equal density fixed mode matches auto within ±2.5 points;
+  trying 7 widths gains another 1–3.
 - Authored seams as a soft segmentation cost do nothing below weight 2:
   growth only stops at `MAX_COST`, so costs just reorder growth (spot followed
   10% of UV seams at weight 0–1, 90% at 2). Hence hard cuts in topology.
@@ -172,16 +178,12 @@ machine is often loaded, so multi-core timings are noisy.
 
 ## Next steps (priority order)
 
-1. Fixed-density packing quality: on small atlases (bunny at 400 texels/unit,
-   ~134×158) utilization is ~43% vs ~66% in auto mode. This is the mode
-   engines use (Godot: `texelsPerUnit = 1 / texel_size`); check the page
-   width heuristic and padding overhead.
-2. Multi-mesh: one page per mesh option, per-mesh bounds.
-3. Progress/cancellation; repacking existing UVs.
-4. CI (tests in both feature configs, wasm32 build, example output hashes
+1. Multi-mesh: one page per mesh option, per-mesh bounds.
+2. Progress/cancellation; repacking existing UVs.
+3. CI (tests in both feature configs, wasm32 build, example output hashes
    compared across x86-64/ARM/wasm32 without `direct-solver`), then publish
    0.1 to crates.io; refresh `docs/atlases.png` (still shows the old
    rect-packed atlases).
-5. Deterministic direct solver (own sparse Cholesky), if cross-platform
+4. Deterministic direct solver (own sparse Cholesky), if cross-platform
    determinism must hold with the fast path.
-6. Bevy integration crate.
+5. Bevy integration crate.

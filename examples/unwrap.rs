@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! cargo run --release --example unwrap -- [--rect] [--flat] [--block-align]
-//!     [--texels-per-unit X] [--max-chart-size N] [--padding N] [input.obj] [output_prefix]
+//!     [--texels-per-unit X] [--max-chart-size N] [--padding N] [--resolution N] [input.obj] [output_prefix]
 //! ```
 //!
 //! Vertices are split per distinct `v/vt/vn` corner, as an engine import
@@ -106,6 +106,9 @@ fn main() {
     if let Some(v) = value("--max-chart-size") {
         opts.max_chart_size = v.parse().expect("--max-chart-size");
     }
+    if let Some(v) = value("--resolution") {
+        opts.resolution = v.parse().expect("--resolution");
+    }
     if let Some(v) = value("--padding") {
         opts.padding = v.parse().expect("--padding");
     }
@@ -130,7 +133,7 @@ fn main() {
     let elapsed = start.elapsed();
     let out = &atlas.meshes[0];
     println!(
-        "{} triangles -> {} charts, {} vertices ({} in), {}x{} x{} page(s), {:.1}% utilization, {:.1} ms",
+        "{} triangles -> {} charts, {} vertices ({} in), {}x{} x{} page(s), {:.4} texels/unit, {:.1}% utilization, {:.1} ms",
         indices.len() / 3,
         atlas.chart_count,
         out.vertices.len(),
@@ -138,6 +141,7 @@ fn main() {
         atlas.width,
         atlas.height,
         atlas.page_count,
+        atlas.texels_per_unit,
         atlas.utilization * 100.0,
         elapsed.as_secs_f64() * 1000.0
     );

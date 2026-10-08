@@ -1,4 +1,10 @@
 //! Small f64 vector helpers and 2D computational geometry.
+//!
+//! Output must be bit-identical on every platform, so nothing here (or
+//! anywhere in the crate) calls the platform math library: `sin`, `cos`,
+//! `atan2` etc. may differ in the last bit between platforms, while `+ - * /`
+//! and `sqrt` are correctly rounded everywhere. [`cos`] and [`angle`] are
+//! deterministic replacements built from those.
 
 pub(crate) type V2 = [f64; 2];
 pub(crate) type V3 = [f64; 3];
@@ -77,19 +83,73 @@ pub(crate) fn convex_hull(points: &[V2]) -> Vec<V2> {
     hull
 }
 
-/// Rotation angle θ such that rotating points by `-θ` minimizes the area of their
-/// axis-aligned bounding box. Uses the fact that an optimal rectangle shares an edge
-/// with the convex hull.
-pub(crate) fn min_area_rect_angle(hull: &[V2]) -> f64 {
-    if hull.len() < 3 {
-        return 0.0;
+/// Deterministic cosine for `|x| <= π/2` (Taylor series to `x^20`, error
+/// below 1e-16).
+pub(crate) fn cos(x: f64) -> f64 {
+    debug_assert!(x.abs() <= std::f64::consts::FRAC_PI_2 + 1e-12);
+    let x2 = x * x;
+    // Horner over 1 - x²/2! + x⁴/4! - ..., innermost term first.
+    let mut r = 1.0;
+    for k in (1..=10).rev() {
+        r = 1.0 - x2 / ((2 * k - 1) * (2 * k)) as f64 * r;
     }
-    let mut best = (f64::INFINITY, 0.0);
+    r
+}
+
+/// Deterministic arctangent for `|t| <= 1`.
+fn atan_unit(t: f64) -> f64 {
+    use std::f64::consts::FRAC_PI_6;
+    let (sign, t) = if t < 0.0 { (-1.0, -t) } else { (1.0, t) };
+    // Reduce to |u| <= tan(π/12) ≈ 0.268 with atan t = π/6 + atan((√3t - 1)/(√3 + t)).
+    let sqrt3 = 3f64.sqrt();
+    let (base, u) = if t > 0.2679491924311227 { (FRAC_PI_6, (sqrt3 * t - 1.0) / (sqrt3 + t)) } else { (0.0, t) };
+    // u - u³/3 + u⁵/5 - ... to u^29 (error below 1e-17).
+    let u2 = u * u;
+    let mut r = 0.0;
+    for k in (0..15).rev() {
+        r = 1.0 / (2 * k + 1) as f64 - u2 * r;
+    }
+    sign * (base + u * r)
+}
+
+/// Deterministic `atan2(y, x)` for `y >= 0`, i.e. the angle in `[0, π]`
+/// between a vector and the x axis, as needed for the angle between two
+/// vectors (`y = |a × b|`, `x = a · b`).
+pub(crate) fn angle(y: f64, x: f64) -> f64 {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    debug_assert!(y >= 0.0);
+    if y == 0.0 {
+        if x < 0.0 {
+            PI
+        } else {
+            0.0
+        }
+    } else if x >= y {
+        atan_unit(y / x)
+    } else if -x >= y {
+        PI - atan_unit(y / -x)
+    } else {
+        FRAC_PI_2 - atan_unit(x / y)
+    }
+}
+
+/// Unit direction `(cos θ, sin θ)` such that rotating points by `-θ` (see
+/// [`rotate`]) minimizes the area of their axis-aligned bounding box. Uses the
+/// fact that an optimal rectangle shares an edge with the convex hull.
+pub(crate) fn min_area_rect_dir(hull: &[V2]) -> (f64, f64) {
+    let mut best = (f64::INFINITY, (1.0, 0.0));
+    if hull.len() < 3 {
+        return best.1;
+    }
     for i in 0..hull.len() {
         let p = hull[i];
         let q = hull[(i + 1) % hull.len()];
-        let theta = (q[1] - p[1]).atan2(q[0] - p[0]);
-        let (s, c) = theta.sin_cos();
+        let (dx, dy) = (q[0] - p[0], q[1] - p[1]);
+        let len = (dx * dx + dy * dy).sqrt();
+        if !(len > 0.0) {
+            continue;
+        }
+        let (c, s) = (dx / len, dy / len);
         let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
         for &h in hull {
             let r = rotate(h, c, s);
@@ -100,7 +160,7 @@ pub(crate) fn min_area_rect_angle(hull: &[V2]) -> f64 {
         }
         let area = (hi[0] - lo[0]) * (hi[1] - lo[1]);
         if area < best.0 {
-            best = (area, theta);
+            best = (area, (c, s));
         }
     }
     best.1
@@ -164,12 +224,27 @@ mod tests {
             .iter()
             .map(|p| [p[0] * c - p[1] * s, p[0] * s + p[1] * c])
             .collect();
-        let theta = min_area_rect_angle(&convex_hull(&pts));
-        let (s2, c2) = theta.sin_cos();
+        let (c2, s2) = min_area_rect_dir(&convex_hull(&pts));
         let r: Vec<V2> = pts.iter().map(|&p| rotate(p, c2, s2)).collect();
         let w = r.iter().map(|p| p[0]).fold(f64::MIN, f64::max) - r.iter().map(|p| p[0]).fold(f64::MAX, f64::min);
         let h = r.iter().map(|p| p[1]).fold(f64::MIN, f64::max) - r.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
         assert!((w * h - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn deterministic_trig_matches_std() {
+        for i in 0..=1000 {
+            let x = std::f64::consts::FRAC_PI_2 * i as f64 / 1000.0;
+            assert!((cos(x) - x.cos()).abs() < 1e-15, "cos({x})");
+            for r in [0.5, 1.0, 2.0] {
+                let (y, xx) = (x.sin() * r, x.cos() * r);
+                let (y2, x2) = ((2.0 * x).sin() * r, (2.0 * x).cos() * r);
+                assert!((angle(y, xx) - y.atan2(xx)).abs() < 1e-15, "angle({y}, {xx})");
+                assert!((angle(y2.abs(), x2) - y2.abs().atan2(x2)).abs() < 1e-15, "angle({y2}, {x2})");
+            }
+        }
+        assert_eq!(angle(0.0, -1.0), std::f64::consts::PI);
+        assert_eq!(angle(0.0, 0.0), 0.0);
     }
 
     #[test]

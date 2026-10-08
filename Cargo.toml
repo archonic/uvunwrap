@@ -25,6 +25,7 @@ faer = { version = "0.22", optional = true, default-features = false, features =
 opt-level = 2
 
 [dev-dependencies]
+rayon = "1.10"
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]

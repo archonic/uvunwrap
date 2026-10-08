@@ -69,6 +69,16 @@ cargo run --release --example unwrap -- model.obj out/model
 
 With no default features the crate has zero dependencies.
 
+## Determinism
+
+The same input, options and features give bit-identical output on any thread
+count. No platform math library calls are used, so without `direct-solver`
+output depends only on IEEE-754 arithmetic and should match across platforms
+(x86-64, ARM, wasm32). With `direct-solver`, faer selects SIMD kernels at
+runtime, so output can differ between CPU architectures. If you cache unwraps
+or bake on one machine and ship to another, build without it. The `unwrap`
+example prints an output hash for comparing builds.
+
 ## Performance
 
 1024×1024 page, 2 texels of padding, release build, Apple M5 (10 cores). Utilization
@@ -88,8 +98,8 @@ is true surface area over atlas area.
 
 ## Status and roadmap
 
-- **Determinism**: identical output across thread counts and platforms, so
-  unwrap caches and baked lightmaps stay valid.
+- **Determinism**: cross-platform identical output with the fast direct
+  solver too, and CI comparing output hashes across architectures.
 - **xatlas parity**: maximum chart size, 4×4 block alignment, winding fixes.
 - **Multi-mesh**: one page per mesh, per-mesh bounds; progress and
   cancellation; repacking existing UVs.

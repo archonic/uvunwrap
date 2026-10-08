@@ -124,6 +124,19 @@ fn main() {
         atlas.utilization * 100.0,
         elapsed.as_secs_f64() * 1000.0
     );
+    // FNV-1a over the whole output: equal on every platform and thread count.
+    let mut hash = 0xcbf29ce484222325u64;
+    let mut feed = |x: u32| {
+        for b in x.to_le_bytes() {
+            hash = (hash ^ b as u64).wrapping_mul(0x100000001b3);
+        }
+    };
+    for v in &out.vertices {
+        [v.xref, v.uv[0].to_bits(), v.uv[1].to_bits(), v.chart.unwrap_or(u32::MAX), v.page].into_iter().for_each(&mut feed);
+    }
+    out.indices.iter().for_each(|&i| feed(i));
+    [atlas.width, atlas.height, atlas.texels_per_unit.to_bits()].into_iter().for_each(&mut feed);
+    println!("output hash {hash:016x}");
 
     let mut obj = String::new();
     for v in &out.vertices {

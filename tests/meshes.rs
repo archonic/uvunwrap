@@ -377,3 +377,19 @@ fn mesh_input_errors() {
         assert!(matches!(generate(&[bad_scale], &o), Err(Error::InvalidScale { mesh: 0 })));
     }
 }
+
+#[test]
+fn output_is_deterministic() {
+    // Bit-identical output across runs (fresh hash seeds each time) and thread
+    // counts, on meshes that exercise segmentation, splitting and packing.
+    let (a, b, c) = (torus(48, 24), sphere(32, 16), cube());
+    let inputs = [a.input(), b.input(), c.input()];
+    let reference = generate(&inputs, &Options::default()).unwrap();
+    for threads in [1, 2, 3, 8] {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+        for _ in 0..2 {
+            let atlas = pool.install(|| generate(&inputs, &Options::default()).unwrap());
+            assert!(atlas == reference, "output differs with {threads} threads");
+        }
+    }
+}

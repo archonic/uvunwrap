@@ -91,7 +91,7 @@ fn total_curvature(topo: &Topology, verts: &[u32], local: &[[u32; 3]]) -> f64 {
         for k in 0..3 {
             let a = sub3(p[(k + 1) % 3], p[k]);
             let b = sub3(p[(k + 2) % 3], p[k]);
-            angle[t[k] as usize] += (dot3(a, b) / (len3(a) * len3(b))).clamp(-1.0, 1.0).acos();
+            angle[t[k] as usize] += crate::geom::angle(len3(cross3(a, b)), dot3(a, b));
             let (u, v) = (t[k], t[(k + 1) % 3]);
             let e = edges.entry((u.min(v), u.max(v))).or_insert(false);
             *e = !*e;
@@ -403,8 +403,7 @@ fn finalize(topo: &Topology, faces: Vec<u32>, verts: Vec<u32>, face_local: Vec<[
         .map(|t| signed_area2(uvs[t[0] as usize], uvs[t[1] as usize], uvs[t[2] as usize]))
         .sum();
     let k = if uv_area > 0.0 { (area / uv_area).sqrt() } else { 1.0 };
-    let theta = min_area_rect_angle(&convex_hull(&uvs));
-    let (s, c) = theta.sin_cos();
+    let (c, s) = min_area_rect_dir(&convex_hull(&uvs));
     let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     for p in uvs.iter_mut() {
         let r = rotate(*p, c, s);

@@ -35,6 +35,16 @@
 //! Output meshes have the same triangles in the same order, but vertices on
 //! chart seams are duplicated, so each output vertex carries an
 //! [`OutputVertex::xref`] to the input vertex it came from.
+//!
+//! # Determinism
+//!
+//! The same input, options and crate features give bit-identical output
+//! regardless of thread count. The platform math library is never used, so
+//! without the `direct-solver` feature the result depends only on IEEE-754
+//! arithmetic and is expected to match on every 64-bit platform and wasm32.
+//! With `direct-solver`, `faer` picks SIMD kernels at runtime, so output may
+//! differ between CPU architectures (e.g. x86-64 vs ARM); disable it if you
+//! cache unwraps or bake lightmaps on one machine and use them on another.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -141,7 +151,7 @@ impl Default for Options {
 }
 
 /// The generated atlas.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Atlas {
     /// Page width in texels.
     pub width: u32,

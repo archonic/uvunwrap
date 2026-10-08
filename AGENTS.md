@@ -38,10 +38,14 @@ Crate goals (✅ done, ◐ partial, ☐ missing):
 5. ◐ **Multi-mesh atlases.** `generate` packs many meshes into shared pages.
    Missing: an option to keep each mesh on one page (a Bevy mesh takes one
    lightmap image) and per-mesh bounds within the page (for `uv_rect`).
-6. ☐ **Determinism.** Same input gives the same output bit for bit, for any
-   thread count and ideally across platforms (x86/ARM, with and without
-   SIMD), so unwrap caches and baked lightmaps stay valid. At the least,
-   guarantee it per platform, test it, and document the limits.
+6. ◐ **Determinism.** Same input gives bit-identical output for any thread
+   count (tested). No platform math (`geom::cos`/`geom::angle` replace libm
+   trig; never call `sin`/`cos`/`atan2`/`acos`/`powf`/`exp` etc. in `src/`),
+   so without `direct-solver` output should match across platforms;
+   unverified until CI compares example hashes on x86-64, ARM and wasm32.
+   Missing: `direct-solver` (faer) picks SIMD kernels at runtime, so it can
+   differ across architectures; fixing that needs a deterministic sparse
+   Cholesky of our own.
 7. ☐ **Maximum chart size** (xatlas `maxChartSize`): charts bigger than a
    limit are scaled down rather than growing the page or failing.
 8. ☐ **Block alignment** (xatlas `blockAlign`): charts on a 4×4 texel grid
@@ -162,13 +166,13 @@ machine is often loaded, so multi-core timings are noisy.
 
 ## Next steps (priority order)
 
-1. Determinism: test identical output across thread counts and runs; find
-   platform-dependent math (libm trig, faer SIMD paths) and decide what to
-   guarantee.
-2. xatlas parity: maximum chart size, 4×4 block alignment, winding fixing.
-3. Multi-mesh: one page per mesh option, per-mesh bounds.
-4. Progress/cancellation; repacking existing UVs.
-5. CI (tests in both feature configs, wasm32 build), then publish 0.1 to
-   crates.io; refresh `docs/atlases.png` (still shows the old rect-packed
-   atlases).
+1. xatlas parity: maximum chart size, 4×4 block alignment, winding fixing.
+2. Multi-mesh: one page per mesh option, per-mesh bounds.
+3. Progress/cancellation; repacking existing UVs.
+4. CI (tests in both feature configs, wasm32 build, example output hashes
+   compared across x86-64/ARM/wasm32 without `direct-solver`), then publish
+   0.1 to crates.io; refresh `docs/atlases.png` (still shows the old
+   rect-packed atlases).
+5. Deterministic direct solver (own sparse Cholesky), if cross-platform
+   determinism must hold with the fast path.
 6. Bevy integration crate.

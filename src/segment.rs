@@ -81,7 +81,7 @@ fn edge_len(topo: &Topology, f: usize, e: usize) -> f64 {
 /// growing charts on the raw ones gives comb-like boundaries where faces
 /// alternate in and out of the normal cone.
 fn smoothed_normals(topo: &Topology, rounds: usize) -> Vec<V3> {
-    let cos_crease = 30f64.to_radians().cos();
+    let cos_crease = 3f64.sqrt() / 2.0; // cos 30°
     let smooth_neighbors: Vec<[u32; 3]> = (0..topo.faces.len())
         .map(|f| {
             topo.neighbors[f].map(|g| {
@@ -236,7 +236,7 @@ pub(crate) fn segment(topo: &Topology, max_angle: f64) -> Vec<Vec<u32>> {
 }
 
 fn segment_regions(topo: &Topology, reg: &Regions, subset: &[u32], max_angle: f64) -> Vec<Vec<u32>> {
-    let cos_max = max_angle.cos();
+    let cos_max = crate::geom::cos(max_angle);
     let nr = reg.faces.len();
     let mut chart_of = vec![NONE; nr];
     let mut order: Vec<u32> = (0..nr as u32).collect();

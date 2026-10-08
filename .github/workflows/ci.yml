@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Format, clippy, docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --no-default-features -- -D warnings
+      - run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.features }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        features: [default-features, no-default-features]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test
+        shell: bash
+        run: |
+          if [ "${{ matrix.features }}" = no-default-features ]; then
+            cargo test --no-default-features
+          else
+            cargo test
+          fi
+
+  msrv:
+    name: MSRV (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - run: cargo check --lib
+      - run: cargo check --lib --no-default-features
+
+  wasm:
+    name: wasm32 build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo build --lib --target wasm32-unknown-unknown --no-default-features
+
+  determinism-hash:
+    name: Output hash (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Without `direct-solver` the output depends only on IEEE-754
+      # arithmetic, so every platform must produce the same atlas.
+      - name: Unwrap the built-in torus
+        shell: bash
+        run: |
+          cargo run --release --no-default-features --example unwrap | tee run.log
+          grep 'output hash' run.log | awk '{print $3}' > hash-${{ matrix.os }}.txt
+          cat hash-${{ matrix.os }}.txt
+          test -s hash-${{ matrix.os }}.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hash-${{ matrix.os }}
+          path: hash-${{ matrix.os }}.txt
+
+  determinism:
+    name: Same output on every platform
+    needs: determinism-hash
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hash-*
+          merge-multiple: true
+      - name: Compare hashes
+        run: |
+          for f in hash-*.txt; do echo "$f: $(cat "$f")"; done
+          test "$(cat hash-*.txt | sort -u | wc -l)" -eq 1

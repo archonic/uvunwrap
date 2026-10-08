@@ -250,11 +250,13 @@ a slowdown is real, compare both builds with
 
 ### 0.1
 
-1. Packaging and CI: `repository`/`documentation` metadata, `include` list,
-   absolute README image URL; CI with tests in both feature configs, `cargo
-   fmt --check`, clippy `-D warnings`, a wasm32 build, and example output
-   hashes compared across x86-64/ARM/wasm32 without `direct-solver`. Then
-   publish 0.1.
+1. Push to github.com/archonic/uvunwrap and get CI (`.github/workflows/ci.yml`)
+   green: fmt, clippy `-D warnings` and docs; tests on Linux/macOS/Windows in
+   both feature configs; MSRV 1.85 (faer's `generativity` needs it); a
+   wasm32 build without default features; and the example's torus hash
+   compared across Linux x86-64/ARM64, macOS ARM64 and Windows without
+   `direct-solver`. Once that passes, state the cross-platform guarantee as
+   tested in the crate docs and README. Then publish 0.1.
 
 ### 0.2
 

@@ -5,7 +5,7 @@ coordinates for lightmaps, texture baking and texture painting. Inspired by
 [xatlas](https://github.com/jpcy/xatlas), with no C++ toolchain required, so it
 builds for wasm and cross-compiles trivially.
 
-![Atlases for a torus, Spot, Suzanne and the Stanford bunny](docs/atlases.png)
+![Atlases for a torus, Spot, Suzanne and the Stanford bunny](https://raw.githubusercontent.com/archonic/uvunwrap/main/docs/atlases.png)
 
 ## Usage
 

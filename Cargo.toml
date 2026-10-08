@@ -2,10 +2,13 @@
 name = "uvunwrap"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.84"
+rust-version = "1.85"
 description = "Pure-Rust automatic UV unwrapping: chart segmentation, LSCM parameterization and atlas packing (lightmap UVs, baking)"
 license = "MIT"
+repository = "https://github.com/archonic/uvunwrap"
+documentation = "https://docs.rs/uvunwrap"
 readme = "README.md"
+include = ["src/**", "examples/**", "tests/**", "Cargo.toml", "README.md", "LICENSE"]
 keywords = ["uv", "unwrap", "lightmap", "atlas", "parameterization"]
 categories = ["graphics", "rendering", "game-development"]
 

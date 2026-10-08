@@ -18,6 +18,10 @@ for v in &atlas.meshes[0].vertices {
 }
 ```
 
+`generate_with_progress` takes a callback that receives the current stage and
+done/total counts and can return `false` to cancel, for running large unwraps
+as background tasks.
+
 Output meshes keep the input triangles in order; vertices on chart seams are
 duplicated, and `xref` maps each one back to its input vertex.
 
@@ -107,7 +111,7 @@ is true surface area over atlas area.
 
 - **Determinism**: cross-platform identical output with the fast direct
   solver too, and CI comparing output hashes across architectures.
-- **Progress and cancellation**; repacking existing UVs.
+- **Repacking existing UVs** without re-segmenting.
 - **Integrations** (after the above): a Bevy crate.
 
 ## License

@@ -58,8 +58,10 @@ Crate goals (✅ done, ◐ partial, ☐ missing):
    UV orientation): every output triangle is CCW in UV in its input index
    order, including inconsistently wound input (those faces become separate
    charts).
-10. ☐ **Progress and cancellation** (xatlas `ProgressCallback`), so large
-    unwraps can run as background tasks.
+10. ✅ **Progress and cancellation** (xatlas `ProgressCallback`):
+    `generate_with_progress` reports `Progress { stage, done, total }`
+    (meshes, faces, packing trials, meshes) and cancels when the callback
+    returns `false`. Latency is one in-flight chart solve (igea: ~0.13 s).
 11. ☐ **Repack existing UVs** (xatlas `AddUvMesh`): pack authored charts
     without re-segmenting.
 12. ✅ **No global state or scheduler**: rayon only, safe to call any number
@@ -102,6 +104,9 @@ use case.
   when validation found an overlap) and retry, halves in parallel.
   Charts ≥ 1000 faces with |total curvature| > 3 rad are split without
   solving. Finalize: scale to 3D area, rotate to min-area rect.
+- `src/progress.rs`: `Stage`, `Progress`, and `Ctx` (callback behind a mutex
+  so reports are serialized and monotonic, plus an `AtomicBool` that
+  parameterization polls; `QUIET` for nested packing).
 - `src/solver.rs`: sparse rows, `least_squares` = faer supernodal sparse
   Cholesky on normal equations (AᵀA assembled directly in CSC;
   `direct-solver` feature) with Jacobi-preconditioned CGLS fallback.
@@ -155,7 +160,11 @@ counts rasterized texels). xatlas reference (default pack options, 10
 threads): 55–71% utilization, 13–14 s on bunny/armadillo.
 
 Benchmark with best-of-N single-core runs (`RAYON_NUM_THREADS=1`); the dev
-machine is often loaded, so multi-core timings are noisy.
+machine is often loaded, so multi-core timings are noisy. Interleave runs of
+the two binaries being compared. A change that adds no hot code can still move
+timings ~4% by changing how code is split into codegen units; to tell whether
+a slowdown is real, compare both builds with
+`CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1` (also 2–3% faster overall).
 
 ## Notes from tuning (don't retry blindly)
 
@@ -187,7 +196,7 @@ machine is often loaded, so multi-core timings are noisy.
 
 ## Next steps (priority order)
 
-1. Progress/cancellation; repacking existing UVs.
+1. Repacking existing UVs (xatlas `AddUvMesh`).
 2. CI (tests in both feature configs, wasm32 build, example output hashes
    compared across x86-64/ARM/wasm32 without `direct-solver`), then publish
    0.1 to crates.io; refresh `docs/atlases.png` (still shows the old

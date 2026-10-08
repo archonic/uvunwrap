@@ -3,6 +3,7 @@
 //! packer; both share the texel density search.
 
 use crate::geom::V2;
+use crate::progress::{Ctx, Stage, QUIET};
 use crate::mask::{chart_masks, content_size, ChartMasks, Mask, Page};
 use crate::{Error, Packing};
 
@@ -189,6 +190,8 @@ pub(crate) struct Packer<'a> {
     /// Charts occupy whole `block × block` texel blocks, never sharing one
     /// (1: no alignment).
     pub block: u32,
+    /// Progress (one unit per packing trial) and cancellation.
+    pub ctx: &'a Ctx<'a>,
 }
 
 /// Placements (charts, then instances) plus the used `(width, height)` of
@@ -212,7 +215,9 @@ impl Packer<'_> {
     fn layout_tile(&self, t: &TileSpec<'_>, s: f64) -> TileLayout {
         let k_min = t.scales.iter().copied().fold(f64::INFINITY, f64::min);
         let density = s * k_min;
-        let sub = Packer { charts: t.charts, tiles: &[], max_chart_size: 0, block: 1, ..*self };
+        // Nested packing is neither reported nor cancelled; the trials
+        // around it are.
+        let sub = Packer { charts: t.charts, tiles: &[], max_chart_size: 0, block: 1, ctx: &QUIET, ..*self };
         let r = pack(&sub, Some(density), 0).expect("an unbounded page always fits");
         let pad = 2 * self.padding;
         let inner = [r.width.saturating_sub(pad) as f64 / density, r.height.saturating_sub(pad) as f64 / density];
@@ -388,6 +393,7 @@ pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32
         // Fixed density, unbounded single page: try a few near-square widths
         // and keep the smallest page (packing is cheap next to rasterizing).
         (Some(s), 0) => {
+            p.ctx.advance(Stage::Packing, 1, 0)?;
             let prep = p.prepare(s);
             let r = &prep.sizes;
             let bbox: f64 = r.iter().map(|&(w, h)| w as f64 * h as f64).sum();
@@ -411,6 +417,7 @@ pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32
         }
         // Fixed density, fixed page size: as many pages as needed.
         (Some(s), res) => {
+            p.ctx.advance(Stage::Packing, 1, 0)?;
             let prep = p.prepare(s);
             if let Some(&(w, h)) = prep.sizes.iter().find(|&&(w, h)| w.max(h) > res) {
                 return Err(Error::ChartTooLarge { width: w, height: h, resolution: res });
@@ -447,6 +454,7 @@ pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32
                 };
                 hi = (full / area).sqrt();
                 while lo > 0.0 {
+                    p.ctx.advance(Stage::Packing, 1, 0)?;
                     match fits(lo) {
                         Some(b) => {
                             best = Some(b);
@@ -465,6 +473,7 @@ pub(crate) fn pack(p: &Packer<'_>, texels_per_unit: Option<f64>, resolution: u32
                     break;
                 }
                 let mid = if lo > 0.0 { (lo * hi).sqrt() } else { 0.5 * hi };
+                p.ctx.advance(Stage::Packing, 1, 0)?;
                 match fits(mid) {
                     Some(b) => {
                         lo = mid;

@@ -9,6 +9,7 @@
 //! always terminates with a valid parameterization.
 
 use crate::geom::*;
+use crate::progress::{Ctx, Stage};
 use crate::solver::{least_squares, SparseRows};
 use crate::topology::{Topology, NONE};
 use std::collections::{HashMap, VecDeque};
@@ -30,15 +31,33 @@ pub(crate) struct Chart {
     pub area: f64,
 }
 
-pub(crate) fn parameterize_all(topo: &Topology, groups: Vec<Vec<u32>>, max_distortion: f64) -> Vec<Chart> {
+/// Parameterizes every group, reporting finished faces to `ctx` out of
+/// `total` (faces of all meshes). Returns nothing useful once cancelled.
+pub(crate) fn parameterize_all(topo: &Topology, groups: Vec<Vec<u32>>, max_distortion: f64, ctx: &Ctx, total: usize) -> Vec<Chart> {
+    let job = Job { topo, max_distortion, ctx, total };
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
-        groups.into_par_iter().flat_map_iter(|g| parameterize_group(topo, g, max_distortion)).collect()
+        groups.into_par_iter().flat_map_iter(|g| parameterize_group(&job, g)).collect()
     }
     #[cfg(not(feature = "parallel"))]
     {
-        groups.into_iter().flat_map(|g| parameterize_group(topo, g, max_distortion)).collect()
+        groups.into_iter().flat_map(|g| parameterize_group(&job, g)).collect()
+    }
+}
+
+struct Job<'a> {
+    topo: &'a Topology,
+    max_distortion: f64,
+    ctx: &'a Ctx<'a>,
+    total: usize,
+}
+
+impl Job<'_> {
+    fn done(&self, topo: &Topology, faces: Vec<u32>, verts: Vec<u32>, local: Vec<[u32; 3]>, uvs: Vec<V2>) -> Vec<Chart> {
+        // A cancellation is noticed by the caller.
+        let _ = self.ctx.advance(Stage::Parameterizing, faces.len(), self.total);
+        vec![finalize(topo, faces, verts, local, uvs)]
     }
 }
 
@@ -49,22 +68,29 @@ const CURVATURE_CHECK_FACES: usize = 1000;
 /// the distortion limit, and solving them is the main cost on big meshes.
 const MAX_CURVATURE: f64 = 3.0;
 
-fn parameterize_group(topo: &Topology, faces: Vec<u32>, max_distortion: f64) -> Vec<Chart> {
+fn parameterize_group(job: &Job, faces: Vec<u32>) -> Vec<Chart> {
+    if job.ctx.is_cancelled() {
+        return Vec::new();
+    }
+    let (topo, max_distortion) = (job.topo, job.max_distortion);
     let (verts, local) = build_local(topo, &faces);
     let planar = planar_projection(topo, &faces, &verts);
     if faces.len() == 1 || validate(topo, &faces, &local, &planar, 1.02).is_ok() {
-        return vec![finalize(topo, faces, verts, local, planar)];
+        return job.done(topo, faces, verts, local, planar);
     }
     let hopeless = faces.len() >= CURVATURE_CHECK_FACES && total_curvature(topo, &verts, &local).abs() > MAX_CURVATURE;
     let mut overlap = None;
     if !hopeless {
         let conformal = lscm(topo, &verts, &local, &planar);
+        if job.ctx.is_cancelled() {
+            return Vec::new(); // the solve can't be interrupted, but validation can be skipped
+        }
         match validate(topo, &faces, &local, &conformal, max_distortion) {
-            Ok(()) => return vec![finalize(topo, faces, verts, local, conformal)],
+            Ok(()) => return job.done(topo, faces, verts, local, conformal),
             Err(pair) => overlap = pair,
         }
         if validate(topo, &faces, &local, &planar, max_distortion).is_ok() {
-            return vec![finalize(topo, faces, verts, local, planar)];
+            return job.done(topo, faces, verts, local, planar);
         }
     }
     // Overlaps usually come from a local fold in the surface, which no
@@ -72,9 +98,9 @@ fn parameterize_group(topo: &Topology, faces: Vec<u32>, max_distortion: f64) -> 
     // triangles so a single split separates them.
     let (a, b) = split(topo, &faces, overlap);
     #[cfg(feature = "parallel")]
-    let (mut a, b) = rayon::join(|| parameterize_group(topo, a, max_distortion), || parameterize_group(topo, b, max_distortion));
+    let (mut a, b) = rayon::join(|| parameterize_group(job, a), || parameterize_group(job, b));
     #[cfg(not(feature = "parallel"))]
-    let (mut a, b) = (parameterize_group(topo, a, max_distortion), parameterize_group(topo, b, max_distortion));
+    let (mut a, b) = (parameterize_group(job, a), parameterize_group(job, b));
     a.extend(b);
     a
 }

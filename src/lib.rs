@@ -53,12 +53,15 @@ mod geom;
 mod mask;
 mod pack;
 mod param;
+mod progress;
 mod segment;
 mod solver;
 mod topology;
 
 use std::collections::HashMap;
 use std::fmt;
+use progress::Ctx;
+pub use progress::{Progress, Stage};
 use topology::{Topology, NONE};
 
 /// An indexed triangle mesh to unwrap.
@@ -280,6 +283,8 @@ pub enum Error {
     },
     /// An option is out of range.
     InvalidOption(&'static str),
+    /// The progress callback of [`generate_with_progress`] returned `false`.
+    Cancelled,
     /// With a fixed texel density, a chart doesn't fit in a page.
     ChartTooLarge {
         /// Padded chart width in texels.
@@ -308,6 +313,7 @@ impl fmt::Display for Error {
             }
             Error::InvalidScale { mesh } => write!(f, "mesh {mesh}: scale must be finite and > 0"),
             Error::InvalidOption(msg) => write!(f, "invalid option: {msg}"),
+            Error::Cancelled => write!(f, "cancelled"),
             Error::ChartTooLarge { width, height, resolution } => write!(
                 f,
                 "chart of {width}x{height} texels doesn't fit a {resolution}x{resolution} page; lower texels_per_unit"
@@ -365,6 +371,31 @@ fn validate_mesh(mi: usize, m: &MeshInput<'_>) -> Result<(), Error> {
 /// Charts never span meshes, but all charts are packed together, so the
 /// meshes can share one lightmap.
 pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Error> {
+    run(meshes, options, &Ctx::new(None))
+}
+
+/// [`generate`], reporting progress to `callback` as it goes. Returning
+/// `false` from the callback cancels the unwrap: work in flight stops promptly
+/// and [`Error::Cancelled`] is returned.
+///
+/// The callback may run on worker threads, but never concurrently with
+/// itself, and `done` never decreases within a stage.
+///
+/// ```
+/// # let positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]];
+/// # let indices = [0, 1, 2];
+/// let mesh = uvunwrap::MeshInput { positions: &positions, indices: &indices, ..Default::default() };
+/// let atlas = uvunwrap::generate_with_progress(&[mesh], &Default::default(), |p| {
+///     println!("{:?}: {}/{}", p.stage, p.done, p.total);
+///     true // keep going
+/// })?;
+/// # Ok::<(), uvunwrap::Error>(())
+/// ```
+pub fn generate_with_progress(meshes: &[MeshInput<'_>], options: &Options, callback: impl Fn(Progress) -> bool + Sync) -> Result<Atlas, Error> {
+    run(meshes, options, &Ctx::new(Some(&callback)))
+}
+
+fn run(meshes: &[MeshInput<'_>], options: &Options, ctx: &Ctx) -> Result<Atlas, Error> {
     validate_options(options)?;
     for (mi, m) in meshes.iter().enumerate() {
         validate_mesh(mi, m)?;
@@ -372,15 +403,24 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
     let max_angle = (options.max_chart_angle as f64).to_radians();
     let max_distortion = options.max_area_distortion as f64;
 
-    let per_mesh: Vec<(Topology, Vec<param::Chart>)> = meshes
-        .iter()
-        .map(|m| {
-            let topo = Topology::build(m);
-            let groups = segment::segment(&topo, max_angle);
-            let charts = param::parameterize_all(&topo, groups, max_distortion);
+    let mut segmented = Vec::with_capacity(meshes.len());
+    for m in meshes {
+        let topo = Topology::build(m);
+        let groups = segment::segment(&topo, max_angle);
+        segmented.push((topo, groups));
+        ctx.advance(progress::Stage::Segmenting, 1, meshes.len())?;
+    }
+    let faces: usize = segmented.iter().flat_map(|(_, g)| g).map(Vec::len).sum();
+    let per_mesh: Vec<(Topology, Vec<param::Chart>)> = segmented
+        .into_iter()
+        .map(|(topo, groups)| {
+            let charts = param::parameterize_all(&topo, groups, max_distortion, ctx, faces);
             (topo, charts)
         })
         .collect();
+    if ctx.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
 
     // Charts of meshes without instances are packed directly; meshes with
     // instances become tiles.
@@ -406,6 +446,7 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
         method: options.packing,
         max_chart_size: options.max_chart_size,
         block: if options.block_align { 4 } else { 1 },
+        ctx,
     };
     let packed = pack::pack(&packer, options.texels_per_unit.map(f64::from), options.resolution)?;
     let s = packed.texels_per_unit;
@@ -519,6 +560,7 @@ pub fn generate(meshes: &[MeshInput<'_>], options: &Options) -> Result<Atlas, Er
             direct_base += charts.len();
         }
         out_meshes.push(out);
+        ctx.advance(progress::Stage::Output, 1, meshes.len())?;
     }
 
     let total = pw * ph * packed.pages.max(1) as f64;

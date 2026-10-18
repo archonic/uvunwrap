@@ -61,6 +61,7 @@ mod pack;
 mod par;
 mod param;
 mod progress;
+mod raster;
 mod segment;
 mod solver;
 mod tile;
@@ -891,13 +892,13 @@ fn place_chart(
     origin: V2,
     extent: V2,
 ) -> Vec<[f32; 2]> {
-    let (cw, chh) = mask::content_size(ch.size, density);
+    let (cw, chh) = raster::content_size(ch.size, density);
     ch.uvs
         .iter()
         .map(|&[x, y]| {
             // Quarter-turn rotations keep orientation (no mirroring).
             let [x, y] =
-                mask::rotate_texel([x * density, y * density], placement.rotation, cw, chh);
+                raster::rotate_texel([x * density, y * density], placement.rotation, cw, chh);
             let tx = placement.x as f64 + pad + x - origin[0];
             let ty = placement.y as f64 + pad + y - origin[1];
             [

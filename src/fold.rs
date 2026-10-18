@@ -18,6 +18,7 @@
 //! [`Packing::Fast`]: crate::Packing::Fast
 
 use crate::pack::{Layout, Placement};
+use crate::raster::Bits;
 use std::cmp::Reverse;
 
 /// Per-column and per-row extents of a padded mask. Conservative: items
@@ -39,15 +40,39 @@ pub(crate) struct Profile {
 }
 
 impl Profile {
-    /// A `w × h` profile from its column and row extents.
-    pub(crate) fn from_extents(
-        w: u32,
-        h: u32,
-        top: Vec<u32>,
-        bot: Vec<u32>,
-        left: Vec<u32>,
-        right: Vec<u32>,
-    ) -> Profile {
+    /// The profile of a chart's padded bitmap
+    /// ([`crate::raster::rasterize_chart`]), read a word at a time.
+    pub(crate) fn from_bits(bits: &Bits) -> Profile {
+        let (w, h) = (bits.w, bits.h);
+        let mut left = vec![w; h as usize];
+        let mut right = vec![0; h as usize];
+        let mut top = vec![h; w as usize];
+        let mut bot = vec![0; w as usize];
+        for y in 0..h {
+            let row = bits.row(y);
+            if let Some(k) = row.iter().position(|&x| x != 0) {
+                left[y as usize] = k as u32 * 64 + row[k].trailing_zeros();
+                let k = row.iter().rposition(|&x| x != 0).expect("a word is set");
+                right[y as usize] = k as u32 * 64 + 64 - row[k].leading_zeros();
+            }
+        }
+        // A column's top (bottom) is the first row, from above (below), where
+        // its bit is set and wasn't in any row before.
+        let first_rows = |rows: &mut dyn Iterator<Item = u32>, out: &mut [u32], end: bool| {
+            let mut seen = vec![0u64; (w as usize).div_ceil(64)];
+            for y in rows {
+                for (k, (s, &word)) in seen.iter_mut().zip(bits.row(y)).enumerate() {
+                    let mut new = word & !*s;
+                    *s |= new;
+                    while new != 0 {
+                        out[k * 64 + new.trailing_zeros() as usize] = y + end as u32;
+                        new &= new - 1;
+                    }
+                }
+            }
+        };
+        first_rows(&mut (0..h), &mut top, false);
+        first_rows(&mut (0..h).rev(), &mut bot, true);
         Profile {
             w,
             h,
@@ -109,7 +134,7 @@ impl Profile {
     }
 
     /// The profile of the mask turned 90° counter-clockwise (texel `(c, r)`
-    /// to `(h - 1 - r, c)`, as [`crate::mask::rotate_texel`]).
+    /// to `(h - 1 - r, c)`, as [`crate::raster::rotate_texel`]).
     fn rotate90(&self) -> Profile {
         let h = self.h;
         Profile {
@@ -533,7 +558,8 @@ pub(crate) fn pack_folded(
 mod tests {
     use super::*;
     use crate::geom::V2;
-    use crate::mask::{chart_masks, chart_profile, Mask};
+    use crate::mask::{chart_masks, Mask};
+    use crate::raster::rasterize_chart;
 
     /// The profile read off a mask, texel by texel.
     fn profile_of(m: &Mask) -> Profile {
@@ -577,7 +603,7 @@ mod tests {
         ];
         let tris = [[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 5]];
         let masks = chart_masks(&uvs, &tris, [3.0, 5.0], 4.3, 1, true);
-        let mut p = chart_profile(&uvs, &tris, [3.0, 5.0], 4.3, 1);
+        let mut p = Profile::from_bits(&rasterize_chart(&uvs, &tris, [3.0, 5.0], 4.3, 1));
         assert_eq!(p, profile_of(&masks.rot[0]));
         for (k, m) in masks.rot.iter().enumerate() {
             let mut expected = profile_of(m);

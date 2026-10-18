@@ -9,9 +9,10 @@
 
 use crate::fold::{pack_folded, Profile};
 use crate::geom::V2;
-use crate::mask::{chart_masks, chart_profile, content_size, ChartMasks, Mask, Page};
+use crate::mask::{chart_masks, ChartMasks, Mask, Page};
 use crate::par;
 use crate::progress::{Ctx, Stage};
+use crate::raster::{content_size, rasterize_chart};
 use crate::tile::{layout_tile, TileLayout, TileSpec};
 use crate::{Error, Packing};
 
@@ -220,7 +221,7 @@ impl Packer<'_> {
             Packing::Fast => {
                 prep.profiles = par::map_ref(self.charts, |c| {
                     let s = chart_density(c.size, s, self.max_chart_size);
-                    chart_profile(c.uvs, c.tris, c.size, s, self.padding)
+                    Profile::from_bits(&rasterize_chart(c.uvs, c.tris, c.size, s, self.padding))
                         .oriented(self.allow_rotation)
                         .downsample(b)
                 });

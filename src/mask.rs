@@ -1,35 +1,16 @@
-//! Chart masks and the bitmap page used for shape-aware packing.
+//! Chart masks and the bitmap page used for shape packing
+//! ([`Packing::Shape`]).
 //!
-//! A chart is rasterized conservatively (every texel its triangles touch) at
-//! the packing density, dilated by the padding, and stored as per-row spans.
-//! Packing then searches a page bitset for the lowest position where no span
-//! hits an occupied texel, so charts can nest into each other's concavities
-//! and holes instead of reserving their whole bounding rectangle.
+//! A chart's rasterized, padded bitmap ([`crate::raster`]) is stored as
+//! per-row spans in each rotation. Packing then searches a page bitset for
+//! the lowest position where no span hits an occupied texel, so charts can
+//! nest into each other's concavities and holes instead of reserving their
+//! whole bounding rectangle.
+//!
+//! [`Packing::Shape`]: crate::Packing::Shape
 
-use crate::fold::Profile;
 use crate::geom::V2;
-
-/// Texel extent of a chart's content box at density `s`. Chart UVs (in world
-/// units, minimum at the origin) map to `[0, w] × [0, h]` texels.
-pub(crate) fn content_size(size: V2, s: f64) -> (u32, u32) {
-    let side = |v: f64| (v * s).ceil().clamp(1.0, (u32::MAX / 4) as f64) as u32;
-    (side(size[0]), side(size[1]))
-}
-
-/// Maps a chart point already scaled to texels (`p = uv * s`) into its content
-/// box rotated by `rotation` quarter turns counter-clockwise, given the
-/// unrotated content size `(cw, ch)`. All four are proper rotations, so
-/// triangle orientation is preserved.
-#[inline]
-pub(crate) fn rotate_texel(p: V2, rotation: u8, cw: u32, ch: u32) -> V2 {
-    let (w, h) = (cw as f64, ch as f64);
-    match rotation & 3 {
-        0 => p,
-        1 => [h - p[1], p[0]],
-        2 => [w - p[0], h - p[1]],
-        _ => [p[1], w - p[0]],
-    }
-}
+use crate::raster::{fill_row, next_in_row, rasterize_chart, Bits};
 
 /// Half-open texel spans per row.
 #[derive(Clone, Debug, Default)]
@@ -115,7 +96,7 @@ impl Mask {
     }
 
     /// The mask rotated by 90° counter-clockwise (texel `(c, r)` moves to
-    /// `(h - 1 - r, c)`), matching [`rotate_texel`] with rotation 1.
+    /// `(h - 1 - r, c)`), matching [`crate::raster::rotate_texel`] with rotation 1.
     fn rotate90(&self) -> Mask {
         let mut bits = Bits::new(self.h, self.w);
         for r in 0..self.h {
@@ -175,87 +156,6 @@ fn coarse_to_fine(h: u32) -> Vec<u32> {
     order
 }
 
-/// Dense bitmap, one `u64` word run per row.
-struct Bits {
-    w: u32,
-    h: u32,
-    words: usize,
-    data: Vec<u64>,
-}
-
-impl Bits {
-    fn new(w: u32, h: u32) -> Bits {
-        let words = (w as usize).div_ceil(64);
-        Bits {
-            w,
-            h,
-            words,
-            data: vec![0; words * h as usize],
-        }
-    }
-
-    #[inline]
-    fn set(&mut self, x: u32, y: u32) {
-        self.data[y as usize * self.words + (x / 64) as usize] |= 1 << (x % 64);
-    }
-
-    /// Sets `[a, b)` in row `y`.
-    fn fill(&mut self, y: u32, a: u32, b: u32) {
-        fill_row(
-            &mut self.data[y as usize * self.words..(y as usize + 1) * self.words],
-            a,
-            b,
-        );
-    }
-
-    /// First `x' >= x` whose bit equals `value`, or `w`.
-    fn next(&self, y: u32, x: u32, value: bool) -> u32 {
-        next_in_row(
-            &self.data[y as usize * self.words..(y as usize + 1) * self.words],
-            x,
-            value,
-        )
-        .min(self.w)
-    }
-}
-
-fn fill_row(row: &mut [u64], a: u32, b: u32) {
-    if a >= b {
-        return;
-    }
-    let (wa, wb) = ((a / 64) as usize, ((b - 1) / 64) as usize);
-    let lo = !0u64 << (a % 64);
-    let hi = !0u64 >> (63 - (b - 1) % 64);
-    if wa == wb {
-        row[wa] |= lo & hi;
-    } else {
-        row[wa] |= lo;
-        row[wa + 1..wb].iter_mut().for_each(|w| *w = !0);
-        row[wb] |= hi;
-    }
-}
-
-/// First index `>= x` whose bit equals `value`; `row.len() * 64` if none.
-#[inline]
-fn next_in_row(row: &[u64], x: u32, value: bool) -> u32 {
-    let mut i = (x / 64) as usize;
-    if i >= row.len() {
-        return x;
-    }
-    let flip = if value { 0 } else { !0 };
-    let mut word = (row[i] ^ flip) & (!0u64 << (x % 64));
-    loop {
-        if word != 0 {
-            return i as u32 * 64 + word.trailing_zeros();
-        }
-        i += 1;
-        if i == row.len() {
-            return i as u32 * 64;
-        }
-        word = row[i] ^ flip;
-    }
-}
-
 /// Rotations of a chart's padded mask, indexed by quarter turns: just the
 /// unrotated mask, or all four.
 pub(crate) struct ChartMasks {
@@ -273,7 +173,7 @@ pub(crate) fn chart_masks(
     padding: u32,
     all_rotations: bool,
 ) -> ChartMasks {
-    let m0 = Mask::from_bits(&chart_bits(uvs, tris, size, s, padding));
+    let m0 = Mask::from_bits(&rasterize_chart(uvs, tris, size, s, padding));
     let rot = if all_rotations {
         let m1 = m0.rotate90();
         let (m2, m3) = (m0.rotate180(), m1.rotate180());
@@ -282,148 +182,6 @@ pub(crate) fn chart_masks(
         vec![m0]
     };
     ChartMasks { rot }
-}
-
-/// The [`Profile`] of a chart's unrotated padded mask (as from
-/// [`chart_masks`]), read straight off the bitmap a word at a time.
-pub(crate) fn chart_profile(
-    uvs: &[V2],
-    tris: &[[u32; 3]],
-    size: V2,
-    s: f64,
-    padding: u32,
-) -> Profile {
-    let bits = chart_bits(uvs, tris, size, s, padding);
-    let (w, h, n) = (bits.w, bits.h, bits.words);
-    let mut left = vec![w; h as usize];
-    let mut right = vec![0; h as usize];
-    let mut top = vec![h; w as usize];
-    let mut bot = vec![0; w as usize];
-    for y in 0..h {
-        let row = &bits.data[y as usize * n..(y as usize + 1) * n];
-        if let Some(k) = row.iter().position(|&x| x != 0) {
-            left[y as usize] = k as u32 * 64 + row[k].trailing_zeros();
-            let k = row.iter().rposition(|&x| x != 0).expect("a word is set");
-            right[y as usize] = k as u32 * 64 + 64 - row[k].leading_zeros();
-        }
-    }
-    // A column's top (bottom) is the first row, from above (below), where
-    // its bit is set and wasn't in any row before.
-    let first_rows = |rows: &mut dyn Iterator<Item = u32>, out: &mut [u32], end: bool| {
-        let mut seen = vec![0u64; n];
-        for y in rows {
-            for (k, s) in seen.iter_mut().enumerate() {
-                let mut new = bits.data[y as usize * n + k] & !*s;
-                *s |= new;
-                while new != 0 {
-                    out[k * 64 + new.trailing_zeros() as usize] = y + end as u32;
-                    new &= new - 1;
-                }
-            }
-        }
-    };
-    first_rows(&mut (0..h), &mut top, false);
-    first_rows(&mut (0..h).rev(), &mut bot, true);
-    Profile::from_extents(w, h, top, bot, left, right)
-}
-
-/// A chart rasterized conservatively (every texel its triangles touch) at
-/// density `s`, then dilated by `padding`.
-fn chart_bits(uvs: &[V2], tris: &[[u32; 3]], size: V2, s: f64, padding: u32) -> Bits {
-    let (cw, ch) = content_size(size, s);
-    let (w, h) = (
-        cw.saturating_add(padding.saturating_mul(2)),
-        ch.saturating_add(padding.saturating_mul(2)),
-    );
-    let mut bits = Bits::new(w, h);
-    let off = padding as f64;
-    // Grow each triangle slightly so f32 rounding of the final UVs can never
-    // move a triangle outside its mask.
-    let eps = 1e-3;
-    for t in tris {
-        let p = t.map(|i| {
-            let q = uvs[i as usize];
-            [q[0] * s + off, q[1] * s + off]
-        });
-        let ymin = p[0][1].min(p[1][1]).min(p[2][1]) - eps;
-        let ymax = p[0][1].max(p[1][1]).max(p[2][1]) + eps;
-        let r0 = ((ymin.ceil() - 1.0).max(0.0) as u32).min(h - 1);
-        let r1 = (ymax.floor().max(0.0) as u32).min(h - 1);
-        for r in r0..=r1 {
-            // X extent of the triangle within the closed row slab [r, r + 1].
-            let Some((xmin, xmax)) = slab_extent(&p, r as f64 - eps, r as f64 + 1.0 + eps) else {
-                continue;
-            };
-            let c0 = ((xmin - eps).ceil() - 1.0).max(0.0) as u32;
-            let c1 = ((xmax + eps).floor().max(0.0) as u32).min(w - 1);
-            if c0 <= c1 {
-                bits.fill(r, c0, c1 + 1);
-            }
-        }
-    }
-    dilate(&bits, padding)
-}
-
-/// X range of a triangle clipped to the horizontal slab `y0 <= y <= y1`.
-fn slab_extent(p: &[V2; 3], y0: f64, y1: f64) -> Option<(f64, f64)> {
-    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-    let mut add = |x: f64| {
-        lo = lo.min(x);
-        hi = hi.max(x);
-    };
-    for i in 0..3 {
-        let (a, b) = (p[i], p[(i + 1) % 3]);
-        if a[1] >= y0 && a[1] <= y1 {
-            add(a[0]);
-        }
-        // Crossings of edge a-b with the slab boundaries.
-        for y in [y0, y1] {
-            if (a[1] - y) * (b[1] - y) < 0.0 {
-                let t = (y - a[1]) / (b[1] - a[1]);
-                add(a[0] + t * (b[0] - a[0]));
-            }
-        }
-    }
-    (lo <= hi).then_some((lo, hi))
-}
-
-/// Square (Chebyshev) dilation by `r` texels.
-fn dilate(src: &Bits, r: u32) -> Bits {
-    if r == 0 {
-        return Bits {
-            w: src.w,
-            h: src.h,
-            words: src.words,
-            data: src.data.clone(),
-        };
-    }
-    let mut horiz = Bits::new(src.w, src.h);
-    for y in 0..src.h {
-        let mut x = 0;
-        while x < src.w {
-            let a = src.next(y, x, true);
-            if a >= src.w {
-                break;
-            }
-            let b = src.next(y, a, false);
-            horiz.fill(y, a.saturating_sub(r), (b + r).min(src.w));
-            x = b;
-        }
-    }
-    let mut out = Bits::new(src.w, src.h);
-    let n = src.words;
-    for y in 0..src.h as usize {
-        let (y0, y1) = (
-            y.saturating_sub(r as usize),
-            (y + r as usize).min(src.h as usize - 1),
-        );
-        for yy in y0..=y1 {
-            for k in 0..n {
-                out.data[y * n + k] |= horiz.data[yy * n + k];
-            }
-        }
-    }
-    out
 }
 
 /// An atlas page as a bitset of occupied texels. Rows past `data` are free,
@@ -607,6 +365,7 @@ impl Page {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raster::{content_size, rotate_texel};
 
     #[test]
     fn rotations_match_transform() {

@@ -4,12 +4,13 @@
 //! factorization fails: CGLS, conjugate gradient on the normal equations
 //! without forming `AᵀA`.
 
-/// Row-compressed sparse matrix.
+/// Row-compressed sparse matrix, built row by row with [`SparseRows::push`]
+/// and [`SparseRows::end_row`].
 pub(crate) struct SparseRows {
-    pub row_ptr: Vec<usize>,
-    pub cols: Vec<u32>,
-    pub vals: Vec<f64>,
-    pub ncols: usize,
+    row_ptr: Vec<usize>,
+    cols: Vec<u32>,
+    vals: Vec<f64>,
+    ncols: usize,
 }
 
 impl SparseRows {
@@ -31,7 +32,7 @@ impl SparseRows {
         self.row_ptr.push(self.cols.len());
     }
 
-    pub fn nrows(&self) -> usize {
+    fn nrows(&self) -> usize {
         self.row_ptr.len() - 1
     }
 
@@ -131,17 +132,17 @@ fn cholesky(a: &SparseRows, b: &[f64], x: &mut [f64]) -> bool {
 
 /// Lower triangle of a symmetric matrix in compressed sparse column form,
 /// row indices sorted within each column.
-#[cfg_attr(not(feature = "direct-solver"), allow(dead_code))]
-pub(crate) struct LowerCsc {
-    pub col_ptr: Vec<usize>,
-    pub row_idx: Vec<usize>,
-    pub vals: Vec<f64>,
+#[cfg(feature = "direct-solver")]
+struct LowerCsc {
+    col_ptr: Vec<usize>,
+    row_idx: Vec<usize>,
+    vals: Vec<f64>,
 }
 
 /// Assembles the lower triangle of `AᵀA` and `Aᵀb`, column by column with a
 /// dense accumulator (no global sort of `O(nnz²)` triplets).
-#[cfg_attr(not(feature = "direct-solver"), allow(dead_code))]
-pub(crate) fn normal_equations(a: &SparseRows, b: &[f64]) -> (LowerCsc, Vec<f64>) {
+#[cfg(feature = "direct-solver")]
+fn normal_equations(a: &SparseRows, b: &[f64]) -> (LowerCsc, Vec<f64>) {
     let n = a.ncols;
     // Aᵀ as column lists of (row, value).
     let mut t_ptr = vec![0usize; n + 1];
@@ -206,15 +207,8 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 }
 
 /// Minimizes `|A x - b|²` starting from `x`, with Jacobi (column-norm)
-/// preconditioning: solves for `y = D x` on `A D⁻¹`, then maps back. Returns
-/// the number of iterations used.
-pub(crate) fn cgls(
-    a: &mut SparseRows,
-    b: &[f64],
-    x: &mut [f64],
-    max_iter: usize,
-    tol: f64,
-) -> usize {
+/// preconditioning: solves for `y = D x` on `A D⁻¹`, then maps back.
+fn cgls(a: &mut SparseRows, b: &[f64], x: &mut [f64], max_iter: usize, tol: f64) {
     let mut norm = vec![0.0; a.ncols];
     for (&c, &v) in a.cols.iter().zip(&a.vals) {
         norm[c as usize] += v * v;
@@ -225,14 +219,13 @@ pub(crate) fn cgls(
         *v /= norm[c as usize];
     }
     x.iter_mut().zip(&norm).for_each(|(xi, n)| *xi *= n);
-    let iters = cgls_raw(a, b, x, max_iter, tol);
+    cgls_raw(a, b, x, max_iter, tol);
     x.iter_mut().zip(&norm).for_each(|(xi, n)| *xi /= n);
-    iters
 }
 
 /// Unpreconditioned CGLS. Stops when the normal-equation residual has dropped
 /// by `tol` relative to the start, or after `max_iter`.
-fn cgls_raw(a: &SparseRows, b: &[f64], x: &mut [f64], max_iter: usize, tol: f64) -> usize {
+fn cgls_raw(a: &SparseRows, b: &[f64], x: &mut [f64], max_iter: usize, tol: f64) {
     let (m, n) = (a.nrows(), a.ncols);
     let mut r = vec![0.0; m];
     a.mul(x, &mut r);
@@ -243,14 +236,14 @@ fn cgls_raw(a: &SparseRows, b: &[f64], x: &mut [f64], max_iter: usize, tol: f64)
     let mut q = vec![0.0; m];
     let mut gamma = dot(&s, &s);
     let stop = gamma * tol * tol;
-    for it in 0..max_iter {
+    for _ in 0..max_iter {
         if gamma <= stop || gamma == 0.0 {
-            return it;
+            return;
         }
         a.mul(&p, &mut q);
         let qq = dot(&q, &q);
         if qq == 0.0 {
-            return it;
+            return;
         }
         let alpha = gamma / qq;
         x.iter_mut().zip(&p).for_each(|(xi, pi)| *xi += alpha * pi);
@@ -263,7 +256,6 @@ fn cgls_raw(a: &SparseRows, b: &[f64], x: &mut [f64], max_iter: usize, tol: f64)
             .for_each(|(pi, si)| *pi = si + beta * *pi);
         gamma = gamma_new;
     }
-    max_iter
 }
 
 #[cfg(test)]
@@ -271,6 +263,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "direct-solver")]
     fn normal_equations_match_dense() {
         // A = [[1, 2, 0], [0, 3, 4], [5, 0, 6], [0, 7, 0]], b = [1, 2, 3, 4]
         let rows: [&[(usize, f64)]; 4] = [

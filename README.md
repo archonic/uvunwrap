@@ -115,7 +115,7 @@ is true surface area over atlas area.
 
 | Model | Triangles | Charts | Single core | Multi-core | Utilization |
 |---|---|---|---|---|---|
-| Spot | 5.9K | 38 | 34 ms | 19 ms | 68% |
+| Spot | 5.9K | 47 | 27 ms | 19 ms | 71% |
 | Stanford bunny | 69K | 58 | 0.19 s | 82 ms | 65% |
 | Armadillo | 100K | 257 | 0.40 s | 0.16 s | 60% |
 | Nefertiti | 100K | 456 | 0.74 s | 0.40 s | 64% |
@@ -126,18 +126,6 @@ is true surface area over atlas area.
 `models/`; `scripts/fetch-models.sh` downloads them from
 [common-3d-test-models](https://github.com/alecjacobson/common-3d-test-models)
 at a pinned commit.
-
-## Status and roadmap
-
-Ready for 0.1 (not yet published). Unwrapping, both packers, instances, UV
-repacking, progress/cancellation and determinism (across thread counts and,
-without `direct-solver`, across platforms) are in place and tested.
-
-- **0.1.x: fast packer tuning.** `Packing::Fast` (fold-and-push after TABI,
-  Gu, Vining & Sheffer 2026) is within a few percent of xatlas's density on
-  most test models; closing the rest is planned.
-- **Determinism** across CPU architectures with the fast direct solver too.
-- **Integrations** (after 0.1): a Bevy crate.
 
 ## License
 

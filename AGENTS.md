@@ -46,16 +46,20 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
 
 ## Layout
 
-- `src/lib.rs`: public API (`generate`/`generate_with_progress`,
-  `MeshInput::new` plus optional `face_materials`/`ignored_faces`/`scale`/
-  `instance_scales`/`existing_uvs`, `Options` with `Density::{Auto, Fixed}`,
-  `Atlas`, `OutputMesh`, `OutputVertex` (`page: Option`), `InstanceRect`,
-  `Error` naming the offending option/array/instance). `run` is validate →
-  `unwrap_meshes` (segment + parameterize, meshes in parallel) →
-  `pack_meshes` (each mesh's `Slot`: `Direct` or `Tiled`) → `assemble_mesh`
-  per mesh in parallel (`place_chart`, `instance_rects`, `split_seams`: seam
-  vertex duplication, `xref` back to input vertices, degenerate/ignored faces
-  collapsed onto one existing UV).
+- `src/lib.rs`: the public API only: crate docs, `generate`/
+  `generate_with_progress`, `MeshInput::new` plus optional
+  `face_materials`/`ignored_faces`/`scale`/`instance_scales`/`existing_uvs`,
+  `Options` with `Density::{Auto, Fixed}` and `Packing::{Shape, Fast}`,
+  `Atlas`, `OutputMesh`, `OutputVertex` (`page: Option`), `InstanceRect`.
+- `src/error.rs`: `Error` (re-exported), naming the offending
+  option/array/instance. `src/validate.rs`: every documented input
+  requirement.
+- `src/pipeline.rs`: `run` is validate → `unwrap_meshes` (segment +
+  parameterize, meshes in parallel) → `pack_meshes` (each mesh's `Slot`:
+  `Direct` or `Tiled`) → `assemble_mesh` per mesh in parallel
+  (`place_chart`, `instance_rects`, `split_seams`: seam vertex duplication,
+  `xref` back to input vertices, degenerate/ignored faces collapsed onto one
+  existing UV).
 - `src/par.rs`: the only place that switches on the `parallel` feature
   (`map`, `map_ref`, `flat_map`, `join`; order-preserving).
 - `src/geom.rs`: f64 vector helpers, convex hull, min-area rectangle, triangle
@@ -86,14 +90,15 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
 - `src/solver.rs`: sparse rows, `least_squares` = faer supernodal sparse
   Cholesky on normal equations (AᵀA assembled directly in CSC;
   `direct-solver` feature) with Jacobi-preconditioned CGLS fallback.
-- `src/mask.rs`: conservative chart rasterization + padding dilation into
-  per-row span masks (4 rotations derived exactly) or, for fast packing,
-  straight into a `Profile` (`chart_profile`, word-at-a-time off the
-  bitmap), and the page bitset with per-row free runs used for exact
-  bottom-left placement search.
-- `src/pack.rs`: `prepare` (sizes and tile layouts, then `rasterize` masks
-  only once sizes pass the page and texel-budget checks), `place` (shape or
-  fast), and one function per mode: `pack_auto` (bisection to fit one page;
+- `src/raster.rs`: shared by both packers: `rasterize_chart` (conservative
+  rasterization + square padding dilation into a `Bits` bitmap) and texel
+  geometry (`content_size`, `rotate_texel`).
+- `src/mask.rs`: the shape packer: per-row span masks from the bitmap (4
+  rotations derived exactly) and the page bitset with per-row free runs
+  used for exact bottom-left placement search.
+- `src/pack.rs`: `prepare` (sizes and tile layouts), then `rasterize` only
+  once sizes pass the page and texel-budget checks (returns `Shapes`: masks
+  or profiles), `place` (by `Shapes`), and one function per mode: `pack_auto` (bisection to fit one page;
   shape is seeded by the fast result with at most 8 back-off steps; cropped to used
   height, multi-page fallback), `pack_unbounded` (fixed density, 7 widths in
   parallel on one set of masks, smallest area), `pack_pages` (fixed density,
@@ -104,8 +109,8 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   (`Mask::downsample`/`Profile::downsample` after rotating in texels,
   sizes rounded up) and scales placements back.
 - `src/fold.rs`: `Packing::Fast`, TABI-style fold-and-push (`pack_folded`).
-  `Profile`: per-column top/bottom and per-row left/right extents of a
-  padded mask, rotated exactly; `oriented` turns charts taller than wide,
+  `Profile` (`from_bits`, word-at-a-time): per-column top/bottom and
+  per-row left/right extents of a padded bitmap, rotated exactly; `oriented` turns charts taller than wide,
   then 180° if that leaves more free space bottom/right (no mirroring).
   Items sorted by height fold into rows (`fold`: bounding boxes abutting, or
   compacted against a per-row frontier of all previous items in the row),
@@ -117,7 +122,7 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
 - `src/tile.rs`: instanced meshes: `layout_tile` packs a tile's charts once
   (`pack_unbounded` at the smallest instance's density, capped so the
   largest instance fits the page); each instance becomes one unrotatable
-  rectangle (`Mask::rect`) among the packed items.
+  rectangle (`Mask::rect` or `Profile::rect`) among the packed items.
 - `tests/`: `common/mod.rs` holds generators and `check`, which verifies
   every output guarantee (topology, positive UV area, no overlaps, 2×padding
   between charts and instances, padding to page edges, ignored faces
@@ -139,7 +144,7 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
 
 - `cargo test` and `cargo test --no-default-features` (both must pass).
   CI (`.github/workflows/ci.yml`) also runs fmt, clippy `-D warnings` in both
-  feature configs, `cargo doc` with `-D warnings`, MSRV 1.85 (faer's
+  feature configs, `cargo doc` with `-D warnings` (public and private items), MSRV 1.85 (faer's
   `generativity` needs it), a wasm32 build and the cross-platform hash
   comparison; run the same locally before committing.
 - `cargo run --release --example unwrap -- [--fast] model.obj out/model`

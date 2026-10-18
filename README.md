@@ -122,8 +122,10 @@ is true surface area over atlas area.
 | Igea | 269K | 83 | 0.96 s | 0.48 s | 66% |
 
 `cargo bench` runs criterion benchmarks on procedural meshes, plus any of
-`spot`, `beetle`, `bunny`, `armadillo` and `nefertiti` found in `models/` (from
-[common-3d-test-models](https://github.com/alecjacobson/common-3d-test-models)).
+`spot`, `beetle`, `bunny`, `armadillo`, `nefertiti` and `igea` found in
+`models/`; `scripts/fetch-models.sh` downloads them from
+[common-3d-test-models](https://github.com/alecjacobson/common-3d-test-models)
+at a pinned commit.
 
 ## Status and roadmap
 

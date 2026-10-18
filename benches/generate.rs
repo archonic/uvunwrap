@@ -2,8 +2,8 @@
 //!
 //! Procedural meshes always run. Models from
 //! <https://github.com/alecjacobson/common-3d-test-models> are included when
-//! present in `models/` (e.g. `models/bunny.obj`; never committed); missing
-//! ones are listed at startup. Each mesh is benchmarked with shape and fast
+//! present in `models/` (`scripts/fetch-models.sh` downloads them; never
+//! committed); missing ones are listed at startup. Each mesh is benchmarked with shape and fast
 //! packing (auto density, 1024 page), fixed density (about one 1024 page),
 //! and four instances; models with UVs also repack them. The iterative solver
 //! is benchmarked with `cargo bench --no-default-features --features parallel`.
@@ -162,7 +162,7 @@ fn load_obj(name: &str) -> Option<Mesh> {
 
 fn bench(c: &mut Criterion) {
     let mut meshes = vec![torus(64, 32), torus(256, 128), soup(2000)];
-    for name in ["spot", "beetle", "bunny", "armadillo", "nefertiti"] {
+    for name in ["spot", "beetle", "bunny", "armadillo", "nefertiti", "igea"] {
         match load_obj(name) {
             Some(m) => meshes.push(m),
             None => eprintln!("skipping models/{name}.obj (not found)"),

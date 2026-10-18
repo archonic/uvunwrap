@@ -173,7 +173,7 @@ use case.
   holds the torus and hash both examples share.
 - `benches/generate.rs`: criterion (`cargo bench`; `-- --test` runs each case
   once): tori and a 2000-triangle soup plus
-  `models/{spot,beetle,bunny,armadillo,nefertiti}.obj` when present, each
+  `models/{spot,beetle,bunny,armadillo,nefertiti,igea}.obj` when present, each
   with shape, fast, fixed density and four instances, plus `repack` for
   models with UVs.
 
@@ -181,8 +181,10 @@ use case.
 
 - `cargo test` and `cargo test --no-default-features` (both must pass)
 - `cargo run --release --example unwrap -- [--fast] model.obj out/model`
-- Test models: https://github.com/alecjacobson/common-3d-test-models (`data/*.obj`),
-  downloaded into the gitignored `models/` dir (bunny is `stanford-bunny.obj`).
+- `scripts/fetch-models.sh`: downloads the test models
+  (https://github.com/alecjacobson/common-3d-test-models, pinned commit,
+  SHA-256 checked) into the gitignored `models/` dir; upstream
+  `stanford-bunny.obj` is saved as `bunny.obj`.
 - Render atlas SVGs: `rsvg-convert -w 800 out/x_page0.svg -o out/x.png`
   (`qlmanage` hangs).
 

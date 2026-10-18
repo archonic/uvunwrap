@@ -101,11 +101,35 @@ pub(crate) struct Layout {
 struct Prepared {
     /// Padded sizes in texels, rounded up to whole blocks.
     sizes: Vec<(u32, u32)>,
-    /// Masks in block units (shape packing only).
-    masks: Vec<ChartMasks>,
-    /// Profiles in block units, oriented for folding (fast packing only).
-    profiles: Vec<Profile>,
     tiles: Vec<TileLayout>,
+}
+
+impl Prepared {
+    /// Fails if the items' total area is beyond what can reasonably be
+    /// rasterized (a density far too high for the meshes).
+    fn check_budget(&self) -> Result<(), Error> {
+        let texels: u64 = self.sizes.iter().map(|&(w, h)| w as u64 * h as u64).sum();
+        if texels > MAX_TEXELS {
+            return Err(Error::AtlasTooLarge { texels });
+        }
+        Ok(())
+    }
+
+    /// The largest item, if any doesn't fit a `page × page` page.
+    fn oversized(&self, page: u32) -> Option<(u32, u32)> {
+        self.sizes
+            .iter()
+            .copied()
+            .filter(|&(w, h)| w.max(h) > page)
+            .max_by_key(|&(w, h)| w.max(h))
+    }
+}
+
+/// The items rasterized for placement, in block units: every rotation's
+/// mask for shape packing, oriented profiles for fast packing.
+enum Shapes {
+    Masks(Vec<ChartMasks>),
+    Profiles(Vec<Profile>),
 }
 
 impl Packer<'_> {
@@ -125,7 +149,7 @@ impl Packer<'_> {
     }
 
     /// Sizes (and tile layouts) of everything to place at density `s`, for
-    /// pages of `page` texels if bounded. Masks are rasterized separately
+    /// pages of `page` texels if bounded. Charts are rasterized separately
     /// ([`Packer::rasterize`]), once the sizes are known to be reasonable.
     fn prepare(&self, s: f64, page: Option<u32>) -> Result<Prepared, Error> {
         let tiles = self
@@ -156,48 +180,20 @@ impl Packer<'_> {
                 sizes.push(padded(content_size(layout.inner, k * s)));
             }
         }
-        Ok(Prepared {
-            sizes,
-            masks: Vec::new(),
-            profiles: Vec::new(),
-            tiles,
-        })
+        Ok(Prepared { sizes, tiles })
     }
 
-    /// Fails if the items' total area is beyond what can reasonably be
-    /// rasterized (a density far too high for the meshes).
-    fn check_budget(prep: &Prepared) -> Result<(), Error> {
-        let texels: u64 = prep.sizes.iter().map(|&(w, h)| w as u64 * h as u64).sum();
-        if texels > MAX_TEXELS {
-            return Err(Error::AtlasTooLarge { texels });
-        }
-        Ok(())
-    }
-
-    /// The largest item, if any doesn't fit a `page × page` page.
-    fn oversized(prep: &Prepared, page: u32) -> Option<(u32, u32)> {
-        prep.sizes
-            .iter()
-            .copied()
-            .filter(|&(w, h)| w.max(h) > page)
-            .max_by_key(|&(w, h)| w.max(h))
-    }
-
-    /// Rasterizes the charts for placement, in block units: all rotations'
-    /// masks for shape packing, oriented profiles for fast packing; then a
+    /// Rasterizes the charts at density `s` for placement, then adds a
     /// rectangle per instance. Charts are rotated in texels, then
-    /// downsampled, so blocks line up with the rotated chart.
-    fn rasterize(&self, prep: &mut Prepared, s: f64) {
-        if !prep.masks.is_empty() || !prep.profiles.is_empty() {
-            return;
-        }
+    /// downsampled to blocks, so blocks line up with the rotated chart.
+    fn rasterize(&self, prep: &Prepared, s: f64) -> Shapes {
         let b = self.block;
         let instances = prep.sizes[self.charts.len()..]
             .iter()
             .map(|&(w, h)| (w / b, h / b));
         match self.method {
             Packing::Shape => {
-                prep.masks = par::map_ref(self.charts, |c| {
+                let mut masks = par::map_ref(self.charts, |c| {
                     let m = chart_masks(
                         c.uvs,
                         c.tris,
@@ -214,19 +210,20 @@ impl Packer<'_> {
                         m
                     }
                 });
-                prep.masks.extend(instances.map(|(w, h)| ChartMasks {
+                masks.extend(instances.map(|(w, h)| ChartMasks {
                     rot: vec![Mask::rect(w, h)],
                 }));
+                Shapes::Masks(masks)
             }
             Packing::Fast => {
-                prep.profiles = par::map_ref(self.charts, |c| {
+                let mut profiles = par::map_ref(self.charts, |c| {
                     let s = chart_density(c.size, s, self.max_chart_size);
                     Profile::from_bits(&rasterize_chart(c.uvs, c.tris, c.size, s, self.padding))
                         .oriented(self.allow_rotation)
                         .downsample(b)
                 });
-                prep.profiles
-                    .extend(instances.map(|(w, h)| Profile::rect(w, h)));
+                profiles.extend(instances.map(|(w, h)| Profile::rect(w, h)));
+                Shapes::Profiles(profiles)
             }
         }
     }
@@ -234,7 +231,7 @@ impl Packer<'_> {
     /// Places everything on at most `max_pages` pages of `width × height`
     /// texels (`height` may be `u32::MAX`: unbounded). `None` if it doesn't
     /// fit.
-    fn place(&self, prep: &Prepared, width: u32, height: u32, max_pages: usize) -> Option<Layout> {
+    fn place(&self, shapes: &Shapes, width: u32, height: u32, max_pages: usize) -> Option<Layout> {
         // Pack in block units, then scale back to texels.
         let b = self.block;
         let height = if height == u32::MAX {
@@ -242,9 +239,9 @@ impl Packer<'_> {
         } else {
             height / b
         };
-        let mut layout = match self.method {
-            Packing::Fast => pack_folded(&prep.profiles, width / b, height, max_pages)?,
-            Packing::Shape => pack_shapes(&prep.masks, width / b, height, max_pages)?,
+        let mut layout = match shapes {
+            Shapes::Profiles(profiles) => pack_folded(profiles, width / b, height, max_pages)?,
+            Shapes::Masks(masks) => pack_shapes(masks, width / b, height, max_pages)?,
         };
         if b > 1 {
             for p in &mut layout.placements {
@@ -395,21 +392,21 @@ fn pack_auto(p: &Packer<'_>, size: u32) -> Result<PackResult, Error> {
     // page places the same rows as onto a bounded one until a row
     // overflows, so one fold answers both.
     let trial = |s: f64| -> Result<(Option<Fit>, Option<u32>), Error> {
-        let mut prep = p.prepare(s, Some(size))?;
-        if Packer::oversized(&prep, size).is_some() {
+        let prep = p.prepare(s, Some(size))?;
+        if prep.oversized(size).is_some() {
             return Ok((None, None));
         }
-        Packer::check_budget(&prep)?;
-        p.rasterize(&mut prep, s);
+        prep.check_budget()?;
+        let shapes = p.rasterize(&prep, s);
         let (layout, used) = match p.method {
             Packing::Fast => {
                 let layout = p
-                    .place(&prep, size, u32::MAX, 1)
+                    .place(&shapes, size, u32::MAX, 1)
                     .expect("an unbounded page always fits");
                 let used = layout.page_sizes[0].1;
                 ((used <= size).then_some(layout), Some(used))
             }
-            Packing::Shape => (p.place(&prep, size, size, 1), None),
+            Packing::Shape => (p.place(&shapes, size, size, 1), None),
         };
         let fit = layout.map(|layout| Fit {
             prep,
@@ -502,17 +499,17 @@ fn pack_auto(p: &Packer<'_>, size: u32) -> Result<PackResult, Error> {
 /// widths (at most `cap`) and keeps the smallest page within `cap × cap`, or
 /// failing that the one with the shortest longer side.
 pub(crate) fn pack_unbounded(p: &Packer<'_>, s: f64, cap: u32) -> Result<PackResult, Error> {
-    let mut prep = p.prepare(s, None)?;
-    Packer::check_budget(&prep)?;
-    p.rasterize(&mut prep, s);
-    let r = &prep.sizes;
-    let bbox: f64 = r.iter().map(|&(w, h)| w as f64 * h as f64).sum();
+    let prep = p.prepare(s, None)?;
+    prep.check_budget()?;
+    let shapes = p.rasterize(&prep, s);
+    let sizes = &prep.sizes;
+    let bbox: f64 = sizes.iter().map(|&(w, h)| w as f64 * h as f64).sum();
     let fill = if p.method == Packing::Shape {
         0.8
     } else {
         0.95
     };
-    let max_side = r.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(1);
+    let max_side = sizes.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(1);
     let trial = |k: usize| {
         // Seven widths around the estimate, plus the cap itself.
         let side = if k == 7 {
@@ -522,7 +519,7 @@ pub(crate) fn pack_unbounded(p: &Packer<'_>, s: f64, cap: u32) -> Result<PackRes
         };
         let width = round_up(max_side.max((side.ceil() as u32).min(cap)), p.block);
         let layout = p
-            .place(&prep, width, u32::MAX, 1)
+            .place(&shapes, width, u32::MAX, 1)
             .expect("an unbounded page always fits");
         let (w, h) = layout.page_sizes[0];
         let over = w.max(h) > cap;
@@ -543,19 +540,19 @@ pub(crate) fn pack_unbounded(p: &Packer<'_>, s: f64, cap: u32) -> Result<PackRes
 }
 
 /// Fixed density `s` on as many `size × size` pages as needed.
-pub(crate) fn pack_pages(p: &Packer<'_>, s: f64, size: u32) -> Result<PackResult, Error> {
-    let mut prep = p.prepare(s, Some(size))?;
-    if let Some((width, height)) = Packer::oversized(&prep, size) {
+fn pack_pages(p: &Packer<'_>, s: f64, size: u32) -> Result<PackResult, Error> {
+    let prep = p.prepare(s, Some(size))?;
+    if let Some((width, height)) = prep.oversized(size) {
         return Err(Error::ChartTooLarge {
             width,
             height,
             page_size: size,
         });
     }
-    Packer::check_budget(&prep)?;
-    p.rasterize(&mut prep, s);
+    prep.check_budget()?;
+    let shapes = p.rasterize(&prep, s);
     let layout = p
-        .place(&prep, size, size, usize::MAX)
+        .place(&shapes, size, size, usize::MAX)
         .expect("every item fits an empty page");
     Ok(p.finish(prep, layout, size, size, s))
 }

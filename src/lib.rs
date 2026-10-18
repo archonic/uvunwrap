@@ -14,7 +14,8 @@
 //!    ([`Options::max_area_distortion`]) are split and retried, so the output is
 //!    always valid.
 //! 3. **Packing** — charts are rasterized and packed by shape into one or more
-//!    atlas pages, nesting into each other's concavities ([`Packing`]).
+//!    atlas pages, nesting into each other's concavities, or folded into rows
+//!    for speed ([`Packing`]).
 //!
 //! ```
 //! // A unit quad made of two triangles.
@@ -42,7 +43,8 @@
 //! regardless of thread count. The platform math library is never used, so
 //! without the `direct-solver` feature the result depends only on IEEE-754
 //! arithmetic and matches across platforms; CI compares output hashes on
-//! Linux (x86-64, ARM64), macOS (ARM64), Windows (x86-64) and wasm32 (WASI).
+//! Linux (x86-64, ARM64), macOS (ARM64), Windows (x86-64), wasm32-wasip1 and
+//! wasm32-unknown-unknown.
 //! With `direct-solver`, `faer` picks SIMD kernels at runtime, so output may
 //! differ between CPU architectures (e.g. x86-64 vs ARM); disable it if you
 //! cache unwraps or bake lightmaps on one machine and use them on another.
@@ -153,6 +155,7 @@ impl Default for MeshInput<'_> {
 
 /// How texel density and page size are chosen.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Density {
     /// The highest density at which everything fits one `page_size ×
     /// page_size` page. The page is then cropped to the rows actually used,
@@ -251,6 +254,7 @@ impl Default for Options {
 
 /// The generated atlas.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Atlas {
     /// Page width in texels.
     pub width: u32,
@@ -273,6 +277,7 @@ pub struct Atlas {
 
 /// An unwrapped mesh.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct OutputMesh {
     /// New vertices; seam vertices are duplicated.
     pub vertices: Vec<OutputVertex>,
@@ -286,6 +291,7 @@ pub struct OutputMesh {
 /// Where one instance of a mesh lives in the atlas. The instance's texture
 /// coordinate for a vertex is `min + uv * (max - min)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct InstanceRect {
     /// Atlas page.
     pub page: u32,
@@ -298,6 +304,7 @@ pub struct InstanceRect {
 
 /// A vertex of an [`OutputMesh`].
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct OutputVertex {
     /// Index of the input vertex this vertex was created from (xatlas'
     /// name): copy that vertex's other attributes (normals, colors, ...).

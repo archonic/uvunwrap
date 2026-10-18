@@ -21,6 +21,7 @@ pub enum Stage {
 /// A progress report passed to the callback of
 /// [`generate_with_progress`](crate::generate_with_progress).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Progress {
     /// Current stage.
     pub stage: Stage,

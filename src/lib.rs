@@ -42,7 +42,7 @@
 //! regardless of thread count. The platform math library is never used, so
 //! without the `direct-solver` feature the result depends only on IEEE-754
 //! arithmetic and matches across platforms; CI compares output hashes on
-//! Linux (x86-64, ARM64), macOS (ARM64) and Windows (x86-64).
+//! Linux (x86-64, ARM64), macOS (ARM64), Windows (x86-64) and wasm32 (WASI).
 //! With `direct-solver`, `faer` picks SIMD kernels at runtime, so output may
 //! differ between CPU architectures (e.g. x86-64 vs ARM); disable it if you
 //! cache unwraps or bake lightmaps on one machine and use them on another.

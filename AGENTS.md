@@ -44,7 +44,8 @@ Crate goals (✅ done, ◐ partial, ☐ missing):
    count (tested). No platform math (`geom::cos`/`geom::angle` replace libm
    trig; never call `sin`/`cos`/`atan2`/`acos`/`powf`/`exp` etc. in `src/`),
    so without `direct-solver` output matches across platforms (CI compares
-   the example's torus hash on Linux x86-64/ARM64, macOS ARM64, Windows).
+   the example's torus hash on Linux x86-64/ARM64, macOS ARM64, Windows
+   and wasm32-wasip1 under wasmtime).
    Missing: `direct-solver` (faer) picks SIMD kernels at runtime, so it can
    differ across architectures; fixing that needs a deterministic sparse
    Cholesky of our own.
@@ -254,8 +255,8 @@ a slowdown is real, compare both builds with
    green: fmt, clippy `-D warnings` and docs; tests on Linux/macOS/Windows in
    both feature configs; MSRV 1.85 (faer's `generativity` needs it); a
    wasm32 build without default features; and the example's torus hash
-   compared across Linux x86-64/ARM64, macOS ARM64 and Windows without
-   `direct-solver`. Done (green 2026-10-18). The example's torus must not
+   compared across Linux x86-64/ARM64, macOS ARM64, Windows and
+   wasm32-wasip1 (wasmtime) without `direct-solver`. Done (green 2026-10-18). The example's torus must not
    use libm trig either (it once used `f32::sin`/`cos`, and glibc vs
    macOS/Windows split the hash).
 2. Replace `Packing::Rect` (rectangle skyline) with a TABI-style

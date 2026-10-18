@@ -87,9 +87,30 @@ jobs:
           name: hash-${{ matrix.os }}
           path: hash-${{ matrix.os }}.txt
 
+  determinism-hash-wasm:
+    name: Output hash (wasm32-wasip1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+      - name: Unwrap the built-in torus
+        run: |
+          cargo build --release --no-default-features --example unwrap --target wasm32-wasip1
+          wasmtime run --dir . target/wasm32-wasip1/release/examples/unwrap.wasm | tee run.log
+          grep 'output hash' run.log | awk '{print $3}' > hash-wasm32-wasip1.txt
+          cat hash-wasm32-wasip1.txt
+          test -s hash-wasm32-wasip1.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hash-wasm32-wasip1
+          path: hash-wasm32-wasip1.txt
+
   determinism:
     name: Same output on every platform
-    needs: determinism-hash
+    needs: [determinism-hash, determinism-hash-wasm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -99,4 +120,5 @@ jobs:
       - name: Compare hashes
         run: |
           for f in hash-*.txt; do echo "$f: $(cat "$f")"; done
+          test "$(ls hash-*.txt | wc -l)" -eq 5
           test "$(cat hash-*.txt | sort -u | wc -l)" -eq 1

@@ -98,8 +98,8 @@ With no default features the crate has zero dependencies.
 The same input, options and features give bit-identical output on any thread
 count. No platform math library calls are used, so without `direct-solver`
 output depends only on IEEE-754 arithmetic and matches across platforms: CI
-compares output hashes on Linux x86-64 and ARM64, macOS ARM64 and Windows
-x86-64 (wasm32 is built but not yet compared). With `direct-solver`, faer selects SIMD kernels at
+compares output hashes on Linux x86-64 and ARM64, macOS ARM64, Windows
+x86-64 and wasm32 (WASI). With `direct-solver`, faer selects SIMD kernels at
 runtime, so output can differ between CPU architectures. If you cache unwraps
 or bake on one machine and ship to another, build without it. The `unwrap`
 example prints an output hash for comparing builds.

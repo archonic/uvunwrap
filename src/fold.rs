@@ -620,6 +620,41 @@ mod tests {
         }
     }
 
+    /// A tall item followed by short ones leaves a knee: the next row is
+    /// folded into the concavity beside the tall item rather than across the
+    /// full width, where its leftmost items would rest on the tall one.
+    #[test]
+    fn rows_fold_into_a_knee() {
+        let mut items = vec![Profile::rect(6, 60)];
+        items.extend((0..60).map(|_| Profile::rect(4, 8)));
+        let layout = pack_folded(&items, 100, 100, 1).unwrap();
+        let p = &layout.placements;
+        // Row 1: the tall item and 23 short ones (6 + 23 × 4 = 98 columns).
+        assert!(p[..24].iter().all(|q| q.y == 0));
+        // Row 2: 23 short items in the knee's columns [6, 100), at y = 8.
+        for (i, q) in p[24..47].iter().enumerate() {
+            assert!(q.x >= 6 && q.y == 8, "item {}: ({}, {})", 24 + i, q.x, q.y);
+        }
+        assert_disjoint(&items, &layout, 100);
+    }
+
+    /// Asserts that no two items' profiles overlap and all stay within their
+    /// `size × size` page.
+    fn assert_disjoint(items: &[Profile], layout: &Layout, size: u32) {
+        let pages = layout.page_sizes.len();
+        let mut grid = vec![vec![false; (size * size) as usize]; pages];
+        for (p, pl) in items.iter().zip(&layout.placements) {
+            assert!(pl.x + p.w <= size && pl.y + p.h <= size);
+            for r in 0..p.h {
+                for c in p.left[r as usize]..p.right[r as usize] {
+                    let t = &mut grid[pl.page as usize][((pl.y + r) * size + pl.x + c) as usize];
+                    assert!(!*t, "overlap at ({}, {})", pl.x + c, pl.y + r);
+                    *t = true;
+                }
+            }
+        }
+    }
+
     /// Random L shapes and rectangles: no two items' masks overlap, and all
     /// stay on their page.
     #[test]
@@ -661,19 +696,7 @@ mod tests {
                 p.oriented(true)
             })
             .collect();
-        let size = 160;
-        let layout = pack_folded(&profiles, size, size, usize::MAX).unwrap();
-        let pages = layout.page_sizes.len();
-        let mut grid = vec![vec![false; (size * size) as usize]; pages];
-        for (p, pl) in profiles.iter().zip(&layout.placements) {
-            assert!(pl.x + p.w <= size && pl.y + p.h <= size);
-            for r in 0..p.h {
-                for c in p.left[r as usize]..p.right[r as usize] {
-                    let t = &mut grid[pl.page as usize][((pl.y + r) * size + pl.x + c) as usize];
-                    assert!(!*t, "overlap at ({}, {})", pl.x + c, pl.y + r);
-                    *t = true;
-                }
-            }
-        }
+        let layout = pack_folded(&profiles, 160, 160, usize::MAX).unwrap();
+        assert_disjoint(&profiles, &layout, 160);
     }
 }

@@ -97,8 +97,9 @@ With no default features the crate has zero dependencies.
 
 The same input, options and features give bit-identical output on any thread
 count. No platform math library calls are used, so without `direct-solver`
-output depends only on IEEE-754 arithmetic and should match across platforms
-(x86-64, ARM, wasm32). With `direct-solver`, faer selects SIMD kernels at
+output depends only on IEEE-754 arithmetic and matches across platforms: CI
+compares output hashes on Linux x86-64 and ARM64, macOS ARM64 and Windows
+x86-64 (wasm32 is built but not yet compared). With `direct-solver`, faer selects SIMD kernels at
 runtime, so output can differ between CPU architectures. If you cache unwraps
 or bake on one machine and ship to another, build without it. The `unwrap`
 example prints an output hash for comparing builds.
@@ -123,15 +124,15 @@ is true surface area over atlas area.
 ## Status and roadmap
 
 Pre-release (0.1 not yet published). Unwrapping, packing, instances, UV
-repacking, progress/cancellation and per-thread-count determinism are in
-place and tested; the API may still change before 0.1.
+repacking, progress/cancellation and determinism (across thread counts and,
+without `direct-solver`, across platforms) are in place and tested; the API
+may still change before 0.1.
 
-- **0.2: a fast packer.** Replace `Packing::Rect` with a fold-and-push
+- **0.1: a fast packer.** Replace `Packing::Rect` with a fold-and-push
   packer after TABI (Gu, Vining & Sheffer 2026) that pushes charts by their
   actual outlines: near-`Shape` quality in milliseconds for thousands of
   charts.
-- **Determinism** across CPU architectures with the fast direct solver too,
-  and CI comparing output hashes across architectures.
+- **Determinism** across CPU architectures with the fast direct solver too.
 - **Integrations** (after 0.1): a Bevy crate.
 
 ## License

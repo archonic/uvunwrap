@@ -43,8 +43,8 @@ Crate goals (✅ done, ◐ partial, ☐ missing):
 6. ◐ **Determinism.** Same input gives bit-identical output for any thread
    count (tested). No platform math (`geom::cos`/`geom::angle` replace libm
    trig; never call `sin`/`cos`/`atan2`/`acos`/`powf`/`exp` etc. in `src/`),
-   so without `direct-solver` output should match across platforms;
-   unverified until CI compares example hashes on x86-64, ARM and wasm32.
+   so without `direct-solver` output matches across platforms (CI compares
+   the example's torus hash on Linux x86-64/ARM64, macOS ARM64, Windows).
    Missing: `direct-solver` (faer) picks SIMD kernels at runtime, so it can
    differ across architectures; fixing that needs a deterministic sparse
    Cholesky of our own.
@@ -255,10 +255,9 @@ a slowdown is real, compare both builds with
    both feature configs; MSRV 1.85 (faer's `generativity` needs it); a
    wasm32 build without default features; and the example's torus hash
    compared across Linux x86-64/ARM64, macOS ARM64 and Windows without
-   `direct-solver`. The example's torus must not use libm trig either (it
-   once used `f32::sin`/`cos`, and glibc vs macOS/Windows split the hash).
-   Once that passes, state the cross-platform guarantee as tested in the
-   crate docs and README.
+   `direct-solver`. Done (green 2026-10-18). The example's torus must not
+   use libm trig either (it once used `f32::sin`/`cos`, and glibc vs
+   macOS/Windows split the hash).
 2. Replace `Packing::Rect` (rectangle skyline) with a TABI-style
    fold-and-push packer, so there are still exactly two packers: `Shape`
    (exhaustive raster search, best quality, default) and the new fast one.

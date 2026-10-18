@@ -44,8 +44,8 @@ Crate goals (✅ done, ◐ partial, ☐ missing):
    count (tested). No platform math (`geom::cos`/`geom::angle` replace libm
    trig; never call `sin`/`cos`/`atan2`/`acos`/`powf`/`exp` etc. in `src/`),
    so without `direct-solver` output matches across platforms (CI compares
-   the example's torus hash on Linux x86-64/ARM64, macOS ARM64, Windows
-   and wasm32-wasip1 under wasmtime).
+   the example's torus hash on Linux x86-64/ARM64, macOS ARM64, Windows,
+   wasm32-wasip1 under wasmtime and wasm32-unknown-unknown under Node).
    Missing: `direct-solver` (faer) picks SIMD kernels at runtime, so it can
    differ across architectures; fixing that needs a deterministic sparse
    Cholesky of our own.
@@ -154,6 +154,9 @@ use case.
   (hostile inputs and a seeded random mesh/options property test).
 - `examples/unwrap.rs`: OBJ in (one vertex per `v/vt/vn` corner, like an
   engine import; `--flat` splits every face) → OBJ with `vt` + SVG per page.
+- `examples/torus_hash.rs` (+ `.mjs`): cdylib exporting the torus hash, for
+  wasm32-unknown-unknown in CI (no stdout there); `examples/common/mod.rs`
+  holds the torus and hash both examples share.
 - `benches/generate.rs`: criterion (`cargo bench`; `-- --test` runs each case
   once): tori and a 2000-triangle soup plus
   `models/{spot,beetle,bunny,armadillo,nefertiti}.obj` when present, each
@@ -256,7 +259,8 @@ a slowdown is real, compare both builds with
    both feature configs; MSRV 1.85 (faer's `generativity` needs it); a
    wasm32 build without default features; and the example's torus hash
    compared across Linux x86-64/ARM64, macOS ARM64, Windows and
-   wasm32-wasip1 (wasmtime) without `direct-solver`. Done (green 2026-10-18). The example's torus must not
+   wasm32-wasip1 (wasmtime) and wasm32-unknown-unknown (Node, via the
+   `torus_hash` cdylib example) without `direct-solver`. Done (green 2026-10-18). The example's torus must not
    use libm trig either (it once used `f32::sin`/`cos`, and glibc vs
    macOS/Windows split the hash).
 2. Replace `Packing::Rect` (rectangle skyline) with a TABI-style

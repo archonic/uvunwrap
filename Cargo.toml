@@ -34,3 +34,8 @@ criterion = { version = "0.5", default-features = false, features = ["cargo_benc
 [[bench]]
 name = "generate"
 harness = false
+
+# A library, so wasm32-unknown-unknown (no process, no stdout) can run it.
+[[example]]
+name = "torus_hash"
+crate-type = ["cdylib"]

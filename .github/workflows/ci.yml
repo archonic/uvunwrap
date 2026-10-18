@@ -54,7 +54,7 @@ jobs:
       - run: cargo check --lib --no-default-features
 
   wasm:
-    name: wasm32 build
+    name: wasm32-unknown-unknown build and output hash
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -62,6 +62,18 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - run: cargo build --lib --target wasm32-unknown-unknown --no-default-features
+      # No process or stdout here, so the hash comes from a cdylib run by Node.
+      - name: Unwrap the built-in torus
+        run: |
+          cargo build --release --no-default-features --example torus_hash --target wasm32-unknown-unknown
+          node examples/torus_hash.mjs target/wasm32-unknown-unknown/release/examples/torus_hash.wasm | tee run.log
+          grep 'output hash' run.log | awk '{print $3}' > hash-wasm32-unknown-unknown.txt
+          cat hash-wasm32-unknown-unknown.txt
+          test -s hash-wasm32-unknown-unknown.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hash-wasm32-unknown-unknown
+          path: hash-wasm32-unknown-unknown.txt
 
   determinism-hash:
     name: Output hash (${{ matrix.os }})
@@ -110,7 +122,7 @@ jobs:
 
   determinism:
     name: Same output on every platform
-    needs: [determinism-hash, determinism-hash-wasm]
+    needs: [determinism-hash, determinism-hash-wasm, wasm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -120,5 +132,5 @@ jobs:
       - name: Compare hashes
         run: |
           for f in hash-*.txt; do echo "$f: $(cat "$f")"; done
-          test "$(ls hash-*.txt | wc -l)" -eq 5
+          test "$(ls hash-*.txt | wc -l)" -eq 6
           test "$(cat hash-*.txt | sort -u | wc -l)" -eq 1

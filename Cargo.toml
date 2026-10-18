@@ -8,7 +8,7 @@ license = "MIT"
 repository = "https://github.com/archonic/uvunwrap"
 documentation = "https://docs.rs/uvunwrap"
 readme = "README.md"
-include = ["src/**", "examples/**", "tests/**", "Cargo.toml", "README.md", "LICENSE"]
+include = ["src/**", "examples/**", "tests/**", "benches/**", "Cargo.toml", "README.md", "LICENSE"]
 keywords = ["uv", "unwrap", "lightmap", "atlas", "parameterization"]
 categories = ["graphics", "rendering", "game-development"]
 

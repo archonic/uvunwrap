@@ -336,7 +336,31 @@ a slowdown is real, compare both builds with
    (folding is < 0.3 ms per trial); predicting the density from the
    height used cut trials from ~10 to 5–8 (fast packing time −20–55%:
    spot 5 ms, nefertiti 19 ms, igea 41 ms, tori300 21/23/60 ms), which
-   also made the shape packer's seed cheap again. Remaining:
+   also made the shape packer's seed cheap again.
+   xatlas on the same charts (2026-10-18; our charts exported as an
+   `AddUvMesh` in texels, since xatlas drops faces below a fixed UV area;
+   `PackCharts` at resolution 1024, padding 2, `bilinear` off, 90°
+   rotations, same density bisection; utilization over the full 1024²):
+
+   | | Shape | xatlas random | xatlas brute | Fast |
+   |---|---|---|---|---|
+   | spot | 70.3% | 62.8% | 65.4% | 60.3% |
+   | beetle | 54.8% | 48.7% | 48.5% | 42.9% |
+   | bunny | 64.1% | 58.0% | 59.1% | 52.5% |
+   | armadillo | 58.7% | 47.6% | 45.2% | 47.8% |
+   | nefertiti | 63.9% | 52.5% | 52.5% | 48.9% |
+   | igea | 62.4% | 58.5% | 57.4% | 49.5% |
+   | tori300 | 40.2% | 28.9% | 11.9% | 39.5% |
+
+   Shape beats xatlas by 4–11 points (and packs in 20–150 ms vs xatlas
+   random's 0.3–1.6 s search, brute 7–14 s). The paper claims TABI ≈
+   xatlas, not ≈ our shape packer: on UV charts its density is within
+   1–4% of xatlas random (Table 8 stretch). Fast's density vs xatlas
+   random: armadillo equal, spot −2%, nefertiti −3.5%, beetle and bunny
+   −6%, igea −8%, tori300 +17%.
+   Remaining:
+   - Close the 6–8% density gap to xatlas on igea, bunny and beetle
+     (the paper's parity).
    - Knees never trigger on the single models (no 10%-of-page height jump
      between neighbours); check where they help (tori, mixed scenes).
    - Tune `pack_unbounded`'s fill estimate for fast (0.95, a guess).

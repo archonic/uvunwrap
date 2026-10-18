@@ -9,7 +9,8 @@
 //!
 //! Vertices are split per distinct `v/vt/vn` corner, as an engine import
 //! would, so UV seams and hard edges reach the unwrapper. `--flat` gives every
-//! triangle its own vertices instead (flat shading). `--keep-uvs` repacks the
+//! triangle its own vertices instead (flat shading). Quads and n-gons stay
+//! whole: each OBJ face is passed as one polygon. `--keep-uvs` repacks the
 //! OBJ's own `vt` islands instead of unwrapping. Without arguments, a
 //! built-in torus is unwrapped into `out/torus*`.
 
@@ -20,11 +21,13 @@ use std::fmt::Write as _;
 use std::time::Instant;
 use std::{env, fs};
 
-/// Positions, triangle indices and (if complete) per-vertex UVs.
-type Obj = (Vec<[f32; 3]>, Vec<u32>, Option<Vec<[f32; 2]>>);
+/// Positions, triangle indices, each triangle's polygon (its `f` line) and
+/// (if complete) per-vertex UVs.
+type Obj = (Vec<[f32; 3]>, Vec<u32>, Vec<u32>, Option<Vec<[f32; 2]>>);
 
 /// Loads an OBJ with one vertex per distinct `v/vt/vn` corner, plus each
-/// vertex's `vt` (if every vertex has one).
+/// vertex's `vt` (if every vertex has one). Quads and n-gons are
+/// fan-triangulated, remembering which polygon each triangle came from.
 fn load_obj(text: &str) -> Obj {
     let mut v: Vec<[f32; 3]> = Vec::new();
     let mut vt: Vec<[f32; 2]> = Vec::new();
@@ -33,6 +36,8 @@ fn load_obj(text: &str) -> Obj {
     let mut corners: HashMap<[i64; 3], u32> = HashMap::new();
     let mut positions = Vec::new();
     let mut indices = Vec::new();
+    let mut polygons = Vec::new();
+    let mut face_count = 0u32;
     for line in text.lines() {
         let mut it = line.split_whitespace();
         match it.next() {
@@ -47,6 +52,8 @@ fn load_obj(text: &str) -> Obj {
             Some("vn") => *nn += 1,
             Some("f") => {
                 // "f a/b/c ..." with 1-based or negative indices; fan-triangulate polygons.
+                let polygon = face_count;
+                face_count += 1;
                 let counts = [v.len() as i64, vt.len() as i64, *nn];
                 let poly: Vec<u32> = it
                     .filter_map(|t| {
@@ -69,6 +76,7 @@ fn load_obj(text: &str) -> Obj {
                     .collect();
                 for k in 1..poly.len().saturating_sub(1) {
                     indices.extend([poly[0], poly[k], poly[k + 1]]);
+                    polygons.push(polygon);
                 }
             }
             _ => {}
@@ -78,7 +86,7 @@ fn load_obj(text: &str) -> Obj {
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .filter(|u| !u.is_empty());
-    (positions, indices, uvs)
+    (positions, indices, polygons, uvs)
 }
 
 /// Gives every triangle its own three vertices.
@@ -141,19 +149,19 @@ fn main() {
     if let Some(v) = value("--padding") {
         opts.padding = v.parse().expect("--padding");
     }
-    let (positions, indices, uvs, prefix) = match args.first() {
+    let (positions, indices, polygons, uvs, prefix) = match args.first() {
         Some(path) => {
-            let (p, i, uv) = load_obj(&fs::read_to_string(path).expect("read input"));
+            let (p, i, poly, uv) = load_obj(&fs::read_to_string(path).expect("read input"));
             let prefix = args
                 .get(1)
                 .cloned()
                 .unwrap_or_else(|| path.trim_end_matches(".obj").to_string() + "_unwrapped");
-            (p, i, uv, prefix)
+            (p, i, Some(poly), uv, prefix)
         }
         None => {
             let (p, i) = common::torus();
             fs::create_dir_all("out").unwrap();
-            (p, i, None, "out/torus".to_string())
+            (p, i, None, None, "out/torus".to_string())
         }
     };
 
@@ -172,6 +180,7 @@ fn main() {
     let mesh = uvunwrap::MeshInput {
         instance_scales: &instances,
         existing_uvs: uvs.as_deref(),
+        polygons: polygons.as_deref(),
         ..uvunwrap::MeshInput::new(&positions, &indices)
     };
     let atlas = uvunwrap::generate(&[mesh], &opts).expect("unwrap failed");

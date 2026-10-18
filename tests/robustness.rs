@@ -109,10 +109,12 @@ fn slivers_and_degenerate_meshes() {
     assert_eq!(atlas.chart_count, 0);
 }
 
-/// A random mesh: a jittered height field, a closed bumpy surface, or a soup
-/// of random triangles.
-fn random_mesh(rng: &mut Rng) -> Mesh {
-    match rng.below(3) {
+/// A random mesh: a jittered height field, a closed bumpy surface (both made
+/// of bent quads, consecutive triangle pairs), or a soup of random triangles.
+/// Also returns whether it is made of quads.
+fn random_mesh(rng: &mut Rng) -> (Mesh, bool) {
+    let kind = rng.below(3);
+    let mesh = match kind {
         0 => {
             let (n, amp) = (2 + rng.below(10) as u32, rng.range(0.0, 2.0));
             let jitter: Vec<f32> = (0..(n + 1) * (n + 1))
@@ -157,7 +159,8 @@ fn random_mesh(rng: &mut Rng) -> Mesh {
                 indices: (0..n as u32 * 3).collect(),
             }
         }
-    }
+    };
+    (mesh, kind < 2)
 }
 
 fn random_options(rng: &mut Rng) -> Options {
@@ -196,8 +199,14 @@ fn random_options(rng: &mut Rng) -> Options {
 fn random_meshes_and_options() {
     for seed in 0..60 {
         let mut rng = Rng::new(seed);
-        let meshes: Vec<Mesh> = (0..1 + rng.below(3))
+        let meshes: Vec<(Mesh, bool)> = (0..1 + rng.below(3))
             .map(|_| random_mesh(&mut rng))
+            .collect();
+        // Every other seed passes the quads as polygons (without drawing from
+        // `rng`, so the other random choices stay as they were).
+        let polygons: Vec<Option<Vec<u32>>> = meshes
+            .iter()
+            .map(|(m, is_quads)| (*is_quads && seed % 2 == 0).then(|| quads(m)))
             .collect();
         let scales: Vec<Vec<f32>> = meshes
             .iter()
@@ -212,8 +221,10 @@ fn random_meshes_and_options() {
         let inputs: Vec<MeshInput> = meshes
             .iter()
             .zip(&scales)
-            .map(|(m, k)| MeshInput {
+            .zip(&polygons)
+            .map(|(((m, _), k), p)| MeshInput {
                 instance_scales: k,
+                polygons: p.as_deref(),
                 ..m.input()
             })
             .collect();

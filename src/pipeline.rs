@@ -352,20 +352,42 @@ fn split_seams(
         }
     }
 
+    // The (chart, chart vertex) that another triangle of face `f`'s polygon
+    // gives welded vertex `w`, if any.
+    let polygon_corner = |f: u32, w: u32| {
+        u.topo.siblings(f).find_map(|g| {
+            let ci = face_chart[g as usize];
+            let c = u.topo.faces[g as usize].iter().position(|&x| x == w)?;
+            (ci != NONE).then(|| {
+                (
+                    ci,
+                    u.charts[ci as usize].face_local[face_slot[g as usize] as usize][c],
+                )
+            })
+        })
+    };
+
     let mut vertices = Vec::new();
     let mut indices = Vec::with_capacity(m.indices.len());
     let mut lookup: HashMap<(u32, u32, u32), u32> = HashMap::new();
     for (f, tri) in m.indices.chunks_exact(3).enumerate() {
         let chart = face_chart[f];
-        // Degenerate and ignored faces collapse onto one existing UV of one
-        // of their corners, so they never stretch across the atlas.
-        let anchor = if chart == NONE {
-            tri.iter()
-                .map(|&o| first[u.topo.welded[o as usize] as usize])
-                .find(|a| a.0 != NONE)
+        // Degenerate and ignored faces get no UV area of their own. A corner
+        // takes its polygon's UV for that vertex where another triangle of
+        // the polygon has one, so each polygon corner keeps one UV; the
+        // others collapse onto one existing UV of one of the corners, so the
+        // face never stretches across the atlas.
+        let welded = |c: usize| u.topo.welded[tri[c] as usize];
+        let corners = if chart == NONE {
+            [0, 1, 2].map(|c| polygon_corner(f as u32, welded(c)))
         } else {
-            None
+            [None; 3]
         };
+        let anchor = corners.iter().flatten().next().copied().or_else(|| {
+            (0..3)
+                .map(|c| first[welded(c) as usize])
+                .find(|a| a.0 != NONE)
+        });
         for (c, &orig) in tri.iter().enumerate() {
             let (ci, l) = if chart != NONE {
                 (
@@ -373,7 +395,7 @@ fn split_seams(
                     u.charts[chart as usize].face_local[face_slot[f] as usize][c],
                 )
             } else {
-                anchor.unwrap_or((NONE, NONE))
+                corners[c].or(anchor).unwrap_or((NONE, NONE))
             };
             let index = *lookup.entry((orig, ci, l)).or_insert_with(|| {
                 vertices.push(if ci == NONE {

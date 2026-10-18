@@ -40,12 +40,23 @@ pub enum Error {
     FaceDataLength {
         /// Mesh position in the input slice.
         mesh: usize,
-        /// Which array: `"face_materials"` or `"ignored_faces"`.
+        /// Which array: `"face_materials"`, `"ignored_faces"` or `"polygons"`.
         field: &'static str,
         /// Length of the array.
         len: usize,
         /// Number of triangles in the mesh.
         face_count: usize,
+    },
+    /// The triangles of one polygon
+    /// ([`MeshInput::polygons`](crate::MeshInput::polygons)) have different
+    /// values in a per-face array.
+    MixedPolygon {
+        /// Mesh position in the input slice.
+        mesh: usize,
+        /// The polygon id.
+        polygon: u32,
+        /// Which array: `"face_materials"` or `"ignored_faces"`.
+        field: &'static str,
     },
     /// [`MeshInput::existing_uvs`](crate::MeshInput::existing_uvs) doesn't have one entry per vertex.
     UvCount {
@@ -110,6 +121,14 @@ impl fmt::Display for Error {
             Error::NonFinitePosition { mesh, vertex } => {
                 write!(f, "mesh {mesh}: vertex {vertex} has a non-finite position")
             }
+            Error::MixedPolygon {
+                mesh,
+                polygon,
+                field,
+            } => write!(
+                f,
+                "mesh {mesh}: polygon {polygon} has triangles with different {field}"
+            ),
             Error::NonFiniteUv { mesh, vertex } => {
                 write!(
                     f,

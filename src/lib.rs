@@ -103,6 +103,17 @@ pub struct MeshInput<'a> {
     /// Optional per-face flags (one per triangle). Flagged faces get no chart:
     /// their corners collapse onto an existing UV, as for degenerate faces.
     pub ignored_faces: Option<&'a [bool]>,
+    /// Optional polygon ids (one per triangle), for meshes triangulated from
+    /// quads and n-gons, such as Blender's `loop_triangles` with their
+    /// `polygon_index`. Triangles with the same id always share a chart, so
+    /// each polygon corner gets exactly one UV, as UV maps that store one UV
+    /// per polygon corner require. Ids are arbitrary; a polygon's triangles
+    /// must have the same [`face_materials`](Self::face_materials) id and
+    /// [`ignored_faces`](Self::ignored_faces) flag. The one exception is a
+    /// polygon so bent that it can't be flattened on its own without folding
+    /// over itself: its triangles are split between charts rather than
+    /// overlapping. Default `None`: each triangle is its own polygon.
+    pub polygons: Option<&'a [u32]>,
     /// Factor from mesh units to world units, so meshes drawn at different
     /// scales share one texel density. Also usable as a per-mesh importance
     /// factor. Must be finite and `> 0`. Default `1`.
@@ -140,6 +151,7 @@ impl<'a> MeshInput<'a> {
             indices,
             face_materials: None,
             ignored_faces: None,
+            polygons: None,
             scale: 1.0,
             instance_scales: &[],
             existing_uvs: None,

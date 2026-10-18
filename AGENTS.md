@@ -48,7 +48,8 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
 
 - `src/lib.rs`: the public API only: crate docs, `generate`/
   `generate_with_progress`, `MeshInput::new` plus optional
-  `face_materials`/`ignored_faces`/`scale`/`instance_scales`/`existing_uvs`,
+  `face_materials`/`ignored_faces`/`polygons`/`scale`/`instance_scales`/
+  `existing_uvs`,
   `Options` with `Density::{Auto, Fixed}` and `Packing::{Shape, Fast}`,
   `Atlas`, `OutputMesh`, `OutputVertex` (`page: Option`), `InstanceRect`.
 - `src/error.rs`: `Error` (re-exported), naming the offending
@@ -59,7 +60,8 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   `Direct` or `Tiled`) → `assemble_mesh` per mesh in parallel
   (`place_chart`, `instance_rects`, `split_seams`: seam vertex duplication,
   `xref` back to input vertices, degenerate/ignored faces collapsed onto one
-  existing UV).
+  existing UV, except that a degenerate face's corners take its polygon's UV
+  for that vertex, so each polygon corner keeps one UV).
 - `src/par.rs`: the only place that switches on the `parallel` feature
   (`map`, `map_ref`, `flat_map`, `join`; order-preserving).
 - `src/geom.rs`: f64 vector helpers, convex hull, min-area rectangle, triangle
@@ -69,8 +71,12 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   manifold + consistently oriented adjacency within one material only. Edges
   where the input splits vertices (authored seams) are cut too, unless more
   than half of all adjacent edges are split (flat shading); with input UVs,
-  edges where the UVs differ are cut instead (always).
-- `src/segment.rs`: xatlas-style growth over planar regions: cost = normal
+  edges where the UVs differ are cut instead (always). Polygon links
+  (`polygon`: each face's lowest-numbered face of its polygon, `siblings`:
+  the others) from `MeshInput::polygons`; every face is its own polygon
+  without them.
+- `src/segment.rs`: xatlas-style growth over planar regions (a polygon's
+  faces always share a region, so charts never split a polygon): cost = normal
   deviation (crease-preserving smoothed normals, hard `max_chart_angle` cone)
   + straightness + roundness + crease penalty; then merge small enclosed
   charts and smooth single-face teeth off boundaries. `components` gives the
@@ -78,7 +84,10 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
 - `src/param.rs`: planar projection if flat, else LSCM; validate (no flips, no
   overlaps via grid + SAT, area ratio ≤ `max_area_distortion`); on failure
   split chart in two (graph-distance Voronoi, seeded at the overlapping pair
-  when validation found an overlap) and retry, halves in parallel.
+  when validation found an overlap; whole polygons go to one side, so only
+  a single polygon that folds over itself is ever split) and retry, halves
+  in parallel. A triangulated polygon has no interior vertices, so it
+  always unfolds exactly unless it overlaps itself.
   Charts ≥ 1000 faces with |total curvature| > 3 rad are split without
   solving. Finalize: scale to 3D area, rotate to min-area rect. With input
   UVs, `parameterize` keeps each island (validated with unbounded
@@ -126,9 +135,11 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
 - `tests/`: `common/mod.rs` holds generators and `check`, which verifies
   every output guarantee (topology, positive UV area, no overlaps, 2×padding
   between charts and instances, padding to page edges, ignored faces
-  collapsed; sweep-and-prune, so large meshes are fine). Topic files:
-  `unwrap`, `inputs`, `packing`, `instances`, `progress`, `robustness`
-  (hostile inputs and a seeded random mesh/options property test).
+  collapsed, one UV per polygon corner when `polygons` is given;
+  sweep-and-prune, so large meshes are fine). Topic files: `unwrap`,
+  `inputs`, `polygons`, `packing`, `instances`, `progress`, `robustness`
+  (hostile inputs and a seeded random mesh/options property test, half
+  the seeds with bent quads as polygons).
 - `examples/unwrap.rs`: OBJ in (one vertex per `v/vt/vn` corner, like an
   engine import; `--flat` splits every face) → OBJ with `vt` + SVG per page.
 - `examples/torus_hash.rs` (+ `.mjs`): cdylib exporting the torus hash, for

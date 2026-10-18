@@ -494,7 +494,7 @@ fn first_overlap(local: &[[u32; 3]], uv: &[V2], total_area: f64) -> Option<Rejec
 
 /// Splits a chart into two edge-connected halves: a graph-distance Voronoi
 /// split between two seed faces (chart face indices), by default two mutually
-/// distant ones.
+/// distant ones. Polygons stay whole unless the chart is a single polygon.
 fn split(topo: &Topology, faces: &[u32], seeds: Option<(u32, u32)>) -> (Vec<u32>, Vec<u32>) {
     let index: HashMap<u32, usize> = faces.iter().enumerate().map(|(i, &f)| (f, i)).collect();
     let bfs = |start: usize| -> Vec<u32> {
@@ -529,16 +529,22 @@ fn split(topo: &Topology, faces: &[u32], seeds: Option<(u32, u32)>) -> (Vec<u32>
             (da, db)
         }
     };
+    // Each polygon goes to the side of its first face here.
+    let mut polygon_side: HashMap<u32, bool> = HashMap::new();
     let (mut left, mut right) = (Vec::new(), Vec::new());
     for (i, &f) in faces.iter().enumerate() {
-        if da[i] <= db[i] {
+        let side = *polygon_side
+            .entry(topo.polygon[f as usize])
+            .or_insert(da[i] <= db[i]);
+        if side {
             left.push(f);
         } else {
             right.push(f);
         }
     }
     if left.is_empty() || right.is_empty() {
-        // Disconnected or otherwise degenerate case: split the list.
+        // A single polygon, or a disconnected or otherwise degenerate case:
+        // split the list.
         let mid = faces.len() / 2;
         return (faces[..mid].to_vec(), faces[mid..].to_vec());
     }

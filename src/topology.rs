@@ -19,6 +19,13 @@ pub(crate) struct Topology {
     pub areas: Vec<f64>,
     /// Degenerate or ignored faces, which get no chart.
     pub excluded: Vec<bool>,
+    /// Per face, the lowest-numbered face of its polygon
+    /// ([`MeshInput::polygons`]); the face itself without polygons.
+    pub polygon: Vec<u32>,
+    /// Per face, the next face of its polygon in ascending order, wrapping
+    /// around (the face itself for a lone triangle): see
+    /// [`Topology::siblings`].
+    polygon_next: Vec<u32>,
     /// `neighbors[f][e]` is the face across edge `(e, e+1)` of `f`, or [`NONE`].
     /// Only manifold, consistently oriented edges between non-excluded faces
     /// of the same material produce adjacency; everything else is treated as
@@ -163,6 +170,7 @@ impl Topology {
             }
         }
 
+        let (polygon, polygon_next) = polygon_links(mesh.polygons, nf);
         Topology {
             welded,
             positions: wpos,
@@ -170,7 +178,37 @@ impl Topology {
             normals,
             areas,
             excluded,
+            polygon,
+            polygon_next,
             neighbors,
         }
     }
+
+    /// The other faces of `f`'s polygon, in ascending order after `f`.
+    pub fn siblings(&self, f: u32) -> impl Iterator<Item = u32> + '_ {
+        std::iter::successors(Some(self.polygon_next[f as usize]), |&g| {
+            Some(self.polygon_next[g as usize])
+        })
+        .take_while(move |&g| g != f)
+    }
+}
+
+/// Each face's polygon (its lowest-numbered face) and the next face of the
+/// same polygon, cyclically, for `nf` faces with optional polygon ids.
+fn polygon_links(polygons: Option<&[u32]>, nf: usize) -> (Vec<u32>, Vec<u32>) {
+    let mut polygon: Vec<u32> = (0..nf as u32).collect();
+    let mut next = polygon.clone();
+    let Some(ids) = polygons else {
+        return (polygon, next);
+    };
+    // Sorted by (id, face), each polygon's faces are one ascending run.
+    let mut order: Vec<u32> = (0..nf as u32).collect();
+    order.sort_unstable_by_key(|&f| (ids[f as usize], f));
+    for run in order.chunk_by(|&a, &b| ids[a as usize] == ids[b as usize]) {
+        for (k, &f) in run.iter().enumerate() {
+            polygon[f as usize] = run[0];
+            next[f as usize] = run[(k + 1) % run.len()];
+        }
+    }
+    (polygon, next)
 }

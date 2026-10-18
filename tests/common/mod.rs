@@ -9,12 +9,14 @@
 //! | area distortion within `max_area_distortion` | `unwrap.rs`: `area_distortion_stays_within_the_limit` |
 //! | determinism across runs and thread counts | `unwrap.rs`: `output_is_deterministic` |
 //! | authored seams, materials, ignored faces, scale, existing UVs | `inputs.rs` |
+//! | polygons stay whole: one UV per polygon corner | `check`; `polygons.rs` |
 //! | fixed density, pages, `max_chart_size`, block alignment, every packer option | `packing.rs` |
 //! | instance rectangles, page limits, scale ratios | `instances.rs` |
 //! | progress order and cancellation | `progress.rs` |
 
 #![allow(dead_code)] // each test binary uses a different subset
 
+use std::collections::HashMap;
 use std::f32::consts::TAU;
 #[allow(unused_imports)]
 pub use uvunwrap::{
@@ -367,6 +369,9 @@ pub fn check(atlas: &Atlas, inputs: &[MeshInput], opts: &Options) {
             );
         }
         assert_eq!(out.instances.len(), input.instance_scales.len());
+        if let Some(polygons) = input.polygons {
+            check_polygons(out, polygons);
+        }
         // Faces the crate may leave uncharted or collapse: degenerate ones
         // (altitude below 1e-6 of the mesh size, as in topology.rs, with
         // margin) and ones too thin for f32 UVs.
@@ -474,6 +479,36 @@ pub fn check(atlas: &Atlas, inputs: &[MeshInput], opts: &Options) {
         }
         active.push(i);
     }
+}
+
+/// Every polygon corner (polygon, input vertex) has exactly one UV, and a
+/// polygon's charted triangles share one chart.
+fn check_polygons(out: &OutputMesh, polygons: &[u32]) {
+    let mut corner_uv: HashMap<(u32, u32), [u32; 2]> = HashMap::new();
+    let mut chart: HashMap<u32, u32> = HashMap::new();
+    for (f, t) in out.indices.chunks_exact(3).enumerate() {
+        let p = polygons[f];
+        for &i in t {
+            let v = out.vertices[i as usize];
+            let uv = v.uv.map(f32::to_bits);
+            let seen = *corner_uv.entry((p, v.xref)).or_insert(uv);
+            assert_eq!(
+                seen, uv,
+                "polygon {p}: vertex {} has two UVs (face {f})",
+                v.xref
+            );
+            if let Some(c) = v.chart {
+                let seen = *chart.entry(p).or_insert(c);
+                assert_eq!(seen, c, "polygon {p} spans charts {seen} and {c}");
+            }
+        }
+    }
+}
+
+/// Polygon ids pairing consecutive triangles: the quads of [`surface`],
+/// [`cube`] and the generators built on them.
+pub fn quads(m: &Mesh) -> Vec<u32> {
+    (0..m.faces() as u32).map(|t| t / 2).collect()
 }
 
 /// Generates an atlas and checks it.

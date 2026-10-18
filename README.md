@@ -41,6 +41,10 @@ seams) become chart boundaries. Optional per-mesh inputs:
 
 - `face_materials`: charts never span two materials.
 - `ignored_faces`: faces that get no UV space.
+- `polygons`: for meshes triangulated from quads and n-gons, the polygon
+  each triangle came from. A polygon's triangles always share a chart, so
+  every polygon corner gets exactly one UV, as UV maps that store one UV
+  per corner (e.g. Blender's) require.
 - `scale`: mesh-to-world scale, so differently scaled instances share one
   texel density.
 - `instance_scales`: one scale per instance of a mesh drawn several times. The mesh

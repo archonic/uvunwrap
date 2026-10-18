@@ -127,7 +127,9 @@ fn smoothed_normals(topo: &Topology, rounds: usize) -> Vec<V3> {
 }
 
 /// Builds the planar regions of the non-excluded faces (excluded ones count
-/// as boundary), using `smooth` normals for the region normals.
+/// as boundary), using `smooth` normals for the region normals. A polygon's
+/// faces always share a region, however bent the polygon, so charts never
+/// split one.
 fn build_regions(topo: &Topology, smooth: &[V3]) -> Regions {
     // Faces whose normals differ by less than ~0.25° count as coplanar.
     const COPLANAR: f64 = 1.0 - 1e-5;
@@ -150,11 +152,11 @@ fn build_regions(topo: &Topology, smooth: &[V3]) -> Regions {
         of_face[seed] = id;
         stack.push(seed as u32);
         while let Some(f) = stack.pop() {
-            for &g in &topo.neighbors[f as usize] {
-                if g != NONE
-                    && of_face[g as usize] == PENDING
-                    && dot3(topo.normals[g as usize], n) >= COPLANAR
-                {
+            let coplanar = topo.neighbors[f as usize]
+                .into_iter()
+                .filter(|&g| g != NONE && dot3(topo.normals[g as usize], n) >= COPLANAR);
+            for g in coplanar.chain(topo.siblings(f)) {
+                if of_face[g as usize] == PENDING {
                     of_face[g as usize] = id;
                     members.push(g);
                     stack.push(g);

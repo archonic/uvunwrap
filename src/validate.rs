@@ -67,6 +67,7 @@ pub(crate) fn mesh(mi: usize, m: &MeshInput<'_>) -> Result<(), Error> {
     let per_face = [
         ("face_materials", m.face_materials.map(<[_]>::len)),
         ("ignored_faces", m.ignored_faces.map(<[_]>::len)),
+        ("polygons", m.polygons.map(<[_]>::len)),
     ];
     for (field, len) in per_face {
         if let Some(len) = len.filter(|&l| l != face_count) {
@@ -76,6 +77,29 @@ pub(crate) fn mesh(mi: usize, m: &MeshInput<'_>) -> Result<(), Error> {
                 len,
                 face_count,
             });
+        }
+    }
+    if let Some(polygons) = m.polygons {
+        // Triangles grouped by polygon: neighbours in this order with the
+        // same id belong to one polygon and must agree.
+        let mut order: Vec<usize> = (0..face_count).collect();
+        order.sort_unstable_by_key(|&f| (polygons[f], f));
+        for pair in order.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if polygons[a] != polygons[b] {
+                continue;
+            }
+            let mixed = |field| Error::MixedPolygon {
+                mesh: mi,
+                polygon: polygons[a],
+                field,
+            };
+            if m.face_materials.is_some_and(|fm| fm[a] != fm[b]) {
+                return Err(mixed("face_materials"));
+            }
+            if m.ignored_faces.is_some_and(|ig| ig[a] != ig[b]) {
+                return Err(mixed("ignored_faces"));
+            }
         }
     }
     if let Some(uvs) = m.existing_uvs {

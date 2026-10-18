@@ -74,7 +74,7 @@ Crate goals (✅ done, ◐ partial, ☐ missing):
 13. ◐ **Robust on real assets.** Degenerate faces, triangle soup and
     non-manifold input must never panic and must still receive valid UVs.
 
-After these: CI, the TABI-style fast packer, then publish 0.1, then a separate Bevy integration crate
+After these (CI and the TABI-style fast packer are done): publish 0.1, then a separate Bevy integration crate
 (`Mesh` → `Mesh` with UV_1 and every attribute remapped, `Lightmap`
 `uv_rect` helpers). Fyrox's lightmapper uses `uvgen` (box projection + rect
 packing); replacing it is an optional later win.
@@ -284,7 +284,7 @@ a slowdown is real, compare both builds with
 
 ## Next steps (priority order)
 
-### 0.1 (publish only after step 2)
+### 0.1
 
 1. Get CI (`.github/workflows/ci.yml`, on github.com/archonic/uvunwrap)
    green: fmt, clippy `-D warnings` and docs; tests on Linux/macOS/Windows in
@@ -295,8 +295,8 @@ a slowdown is real, compare both builds with
    `torus_hash` cdylib example) without `direct-solver`. Done (green 2026-10-18). The example's torus must not
    use libm trig either (it once used `f32::sin`/`cos`, and glibc vs
    macOS/Windows split the hash).
-2. In progress (2026-10-18): `Packing::Fast` (`src/fold.rs`) replaced
-   `Packing::Rect` (skyline); remaining items are at the end of this step.
+2. Done (2026-10-18): `Packing::Fast` (`src/fold.rs`) replaced
+   `Packing::Rect` (skyline). The original plan, then results:
    Replace `Packing::Rect` (rectangle skyline) with a TABI-style
    fold-and-push packer, so there are still exactly two packers: `Shape`
    (exhaustive raster search, best quality, default) and the new fast one.
@@ -360,16 +360,21 @@ a slowdown is real, compare both builds with
    1–4% of xatlas random (Table 8 stretch). Fast's density vs xatlas
    random: armadillo equal, spot −2%, nefertiti −3.5%, beetle and bunny
    −6%, igea −8%, tori300 +17%.
-   Remaining:
+   Later tuning (0.1.x; none of it changes the API):
    - Close the 6–8% density gap to xatlas on igea, bunny and beetle
      (the paper's parity).
    - Knees never trigger on the single models (no 10%-of-page height jump
      between neighbours); check where they help (tori, mixed scenes).
    - Tune `pack_unbounded`'s fill estimate for fast (0.95, a guess).
-   Then publish 0.1.
+3. Publish 0.1 (only with the owner's explicit go-ahead: crates.io
+   versions are permanent). Pre-publish review done 2026-10-18: output
+   types (`Atlas`, `OutputMesh`, `OutputVertex`, `InstanceRect`,
+   `Progress`) and `Density` are `#[non_exhaustive]`; `Options` and
+   `MeshInput` are not (that would forbid `..Default::default()`), so new
+   fields there must have defaults. `cargo publish --dry-run` passes.
 
 ### After 0.1
 
-3. Deterministic direct solver (own sparse Cholesky), if cross-platform
+4. Deterministic direct solver (own sparse Cholesky), if cross-platform
    determinism must hold with the fast path.
-4. Bevy integration crate.
+5. Bevy integration crate.

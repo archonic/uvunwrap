@@ -129,14 +129,13 @@ at a pinned commit.
 
 ## Status and roadmap
 
-Pre-release (0.1 not yet published). Unwrapping, packing, instances, UV
+Ready for 0.1 (not yet published). Unwrapping, both packers, instances, UV
 repacking, progress/cancellation and determinism (across thread counts and,
-without `direct-solver`, across platforms) are in place and tested; the API
-may still change before 0.1.
+without `direct-solver`, across platforms) are in place and tested.
 
-- **0.1: finish the fast packer.** `Packing::Fast` (fold-and-push after
-  TABI, Gu, Vining & Sheffer 2026) replaces the rectangle skyline; a few
-  tuning items remain before release.
+- **0.1.x: fast packer tuning.** `Packing::Fast` (fold-and-push after TABI,
+  Gu, Vining & Sheffer 2026) is within a few percent of xatlas's density on
+  most test models; closing the rest is planned.
 - **Determinism** across CPU architectures with the fast direct solver too.
 - **Integrations** (after 0.1): a Bevy crate.
 

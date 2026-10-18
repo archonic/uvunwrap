@@ -180,6 +180,12 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   3.13 (the version Blender bundles). To try it in Blender, unzip a wheel
   from `maturin build --release` and put that directory on `sys.path`
   (`blender -b --python script.py`).
+- Python releases: `.github/workflows/release-python.yml` builds abi3 wheels
+  (Linux x86-64/ARM64, macOS ARM/Intel, Windows x64) and the sdist, tests
+  the native ones, and uploads to PyPI by trusted publishing (environment
+  `pypi`, no token) when a GitHub release is published; run by hand it only
+  builds unless `publish` is checked. Bump `python/Cargo.toml`'s version
+  with the crate's.
 - Render atlas SVGs: `rsvg-convert -w 800 out/x_page0.svg -o out/x.png`
   (`qlmanage` hangs).
 

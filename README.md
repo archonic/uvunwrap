@@ -62,6 +62,19 @@ Try it on an OBJ file (writes an OBJ with `vt` coordinates plus an SVG per page)
 cargo run --release --example unwrap -- model.obj out/model
 ```
 
+## Python
+
+The same unwrapper is on PyPI, with prebuilt wheels for Linux, macOS and
+Windows (Python 3.11+, no compiler needed):
+
+```sh
+pip install uvunwrap
+```
+
+It takes numpy arrays or any buffer, runs in a background job with progress
+and cancellation, and returns one UV per triangle corner for per-corner UV
+maps such as Blender's. See [`python/`](https://github.com/archonic/uvunwrap/tree/main/python).
+
 ## How it works
 
 1. **Topology**: welds identical positions, drops triangles too thin for f32

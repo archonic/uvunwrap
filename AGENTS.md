@@ -73,7 +73,7 @@ Crate goals (✅ done, ◐ partial, ☐ missing):
 13. ◐ **Robust on real assets.** Degenerate faces, triangle soup and
     non-manifold input must never panic and must still receive valid UVs.
 
-After these: CI and publish 0.1, then a separate Bevy integration crate
+After these: CI, the TABI-style fast packer, then publish 0.1, then a separate Bevy integration crate
 (`Mesh` → `Mesh` with UV_1 and every attribute remapped, `Lightmap`
 `uv_rect` helpers). Fyrox's lightmapper uses `uvgen` (box projection + rect
 packing); replacing it is an optional later win.
@@ -248,18 +248,17 @@ a slowdown is real, compare both builds with
 
 ## Next steps (priority order)
 
-### 0.1
+### 0.1 (publish only after step 2)
 
-1. Push to github.com/archonic/uvunwrap and get CI (`.github/workflows/ci.yml`)
+1. Get CI (`.github/workflows/ci.yml`, on github.com/archonic/uvunwrap)
    green: fmt, clippy `-D warnings` and docs; tests on Linux/macOS/Windows in
    both feature configs; MSRV 1.85 (faer's `generativity` needs it); a
    wasm32 build without default features; and the example's torus hash
    compared across Linux x86-64/ARM64, macOS ARM64 and Windows without
-   `direct-solver`. Once that passes, state the cross-platform guarantee as
-   tested in the crate docs and README. Then publish 0.1.
-
-### 0.2
-
+   `direct-solver`. The example's torus must not use libm trig either (it
+   once used `f32::sin`/`cos`, and glibc vs macOS/Windows split the hash).
+   Once that passes, state the cross-platform guarantee as tested in the
+   crate docs and README.
 2. Replace `Packing::Rect` (rectangle skyline) with a TABI-style
    fold-and-push packer, so there are still exactly two packers: `Shape`
    (exhaustive raster search, best quality, default) and the new fast one.
@@ -291,6 +290,10 @@ a slowdown is real, compare both builds with
    Evaluate against `Shape` on the benchmark models and the 300-torus scene
    (1024/2048/4096 pages): utilization (treat differences under ~3 points
    as noise) and time. Target: milliseconds for thousands of charts.
+   Then publish 0.1.
+
+### After 0.1
+
 3. Deterministic direct solver (own sparse Cholesky), if cross-platform
    determinism must hold with the fast path.
 4. Bevy integration crate.

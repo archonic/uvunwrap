@@ -13,7 +13,7 @@ jobs:
     name: Format, clippy, docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -33,7 +33,7 @@ jobs:
         features: [default-features, no-default-features]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo test
         shell: bash
@@ -48,7 +48,7 @@ jobs:
     name: MSRV (1.85)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.85
       - run: cargo check --lib
       - run: cargo check --lib --no-default-features
@@ -57,7 +57,7 @@ jobs:
     name: wasm32 build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -71,7 +71,7 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       # Without `direct-solver` the output depends only on IEEE-754
       # arithmetic, so every platform must produce the same atlas.
@@ -82,7 +82,7 @@ jobs:
           grep 'output hash' run.log | awk '{print $3}' > hash-${{ matrix.os }}.txt
           cat hash-${{ matrix.os }}.txt
           test -s hash-${{ matrix.os }}.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: hash-${{ matrix.os }}
           path: hash-${{ matrix.os }}.txt
@@ -92,7 +92,7 @@ jobs:
     needs: determinism-hash
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: hash-*
           merge-multiple: true

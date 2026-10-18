@@ -87,17 +87,30 @@ fn flatten(positions: &[[f32; 3]], indices: &[u32]) -> (Vec<[f32; 3]>, Vec<u32>)
     )
 }
 
+/// Cosine and sine of `k / n` turns from Taylor series, so the torus (and the
+/// output hash CI compares) doesn't depend on the platform's libm.
+fn cos_sin(k: u32, n: u32) -> (f64, f64) {
+    use std::f64::consts::{PI, TAU};
+    let mut x = k as f64 / n as f64 * TAU;
+    if x > PI {
+        x -= TAU;
+    }
+    let (mut c, mut s) = (0.0, 0.0);
+    for m in (1..=30).rev() {
+        c = 1.0 - x * x / ((2 * m - 1) * (2 * m)) as f64 * c;
+        s = 1.0 - x * x / ((2 * m) * (2 * m + 1)) as f64 * s;
+    }
+    (c, x * s)
+}
+
 fn torus() -> (Vec<[f32; 3]>, Vec<u32>) {
     let (nu, nv) = (64u32, 32u32);
     let mut positions = Vec::new();
     for j in 0..nv {
         for i in 0..nu {
-            let (a, b) = (
-                i as f32 / nu as f32 * std::f32::consts::TAU,
-                j as f32 / nv as f32 * std::f32::consts::TAU,
-            );
-            let r = 1.0 + 0.4 * b.cos();
-            positions.push([r * a.cos(), r * a.sin(), 0.4 * b.sin()]);
+            let ((ca, sa), (cb, sb)) = (cos_sin(i, nu), cos_sin(j, nv));
+            let r = 1.0 + 0.4 * cb;
+            positions.push([(r * ca) as f32, (r * sa) as f32, (0.4 * sb) as f32]);
         }
     }
     let id = |i: u32, j: u32| (j % nv) * nu + (i % nu);

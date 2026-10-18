@@ -18,7 +18,7 @@ fn instances_get_their_own_rectangles() {
             ..Options::default()
         },
         Options {
-            packing: Packing::Rect,
+            packing: Packing::Fast,
             block_align: true,
             ..Options::default()
         },

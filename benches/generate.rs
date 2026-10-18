@@ -3,7 +3,7 @@
 //! Procedural meshes always run. Models from
 //! <https://github.com/alecjacobson/common-3d-test-models> are included when
 //! present in `models/` (e.g. `models/bunny.obj`; never committed); missing
-//! ones are listed at startup. Each mesh is benchmarked with shape and rect
+//! ones are listed at startup. Each mesh is benchmarked with shape and fast
 //! packing (auto density, 1024 page), fixed density (about one 1024 page),
 //! and four instances; models with UVs also repack them. The iterative solver
 //! is benchmarked with `cargo bench --no-default-features --features parallel`.
@@ -185,10 +185,10 @@ fn bench(c: &mut Criterion) {
         let cases = [
             ("shape", [m.input()], Options::default()),
             (
-                "rect",
+                "fast",
                 [m.input()],
                 Options {
-                    packing: Packing::Rect,
+                    packing: Packing::Fast,
                     ..Options::default()
                 },
             ),

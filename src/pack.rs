@@ -1,5 +1,5 @@
 //! Atlas packing. Charts are placed either by their rasterized shape (see
-//! [`crate::mask`]) or by their bounding rectangle ([`crate::skyline`]);
+//! [`crate::mask`]) or folded into rows by their profiles ([`crate::fold`]);
 //! instanced meshes are placed as one rectangle per instance
 //! ([`crate::tile`]). Three modes choose the density and pages:
 //!
@@ -7,11 +7,11 @@
 //! - [`pack_unbounded`]: a fixed density on one page that grows to fit;
 //! - [`pack_pages`]: a fixed density on as many fixed-size pages as needed.
 
+use crate::fold::{pack_folded, Profile};
 use crate::geom::V2;
-use crate::mask::{chart_masks, content_size, ChartMasks, Mask, Page};
+use crate::mask::{chart_masks, chart_profile, content_size, ChartMasks, Mask, Page};
 use crate::par;
 use crate::progress::{Ctx, Stage};
-use crate::skyline::pack_rects;
 use crate::tile::{layout_tile, TileLayout, TileSpec};
 use crate::{Error, Packing};
 
@@ -100,10 +100,10 @@ pub(crate) struct Layout {
 struct Prepared {
     /// Padded sizes in texels, rounded up to whole blocks.
     sizes: Vec<(u32, u32)>,
-    /// Whether each item may be rotated.
-    rotatable: Vec<bool>,
     /// Masks in block units (shape packing only).
     masks: Vec<ChartMasks>,
+    /// Profiles in block units, oriented for folding (fast packing only).
+    profiles: Vec<Profile>,
     tiles: Vec<TileLayout>,
 }
 
@@ -150,17 +150,15 @@ impl Packer<'_> {
                 ))
             })
             .collect();
-        let mut rotatable = vec![self.allow_rotation; sizes.len()];
         for (t, layout) in self.tiles.iter().zip(&tiles) {
             for &k in t.scales {
                 sizes.push(padded(content_size(layout.inner, k * s)));
-                rotatable.push(false);
             }
         }
         Ok(Prepared {
             sizes,
-            rotatable,
             masks: Vec::new(),
+            profiles: Vec::new(),
             tiles,
         })
     }
@@ -184,37 +182,52 @@ impl Packer<'_> {
             .max_by_key(|&(w, h)| w.max(h))
     }
 
-    /// Rasterizes the masks for shape packing: chart masks, then a rectangle
-    /// per instance.
+    /// Rasterizes the charts for placement, in block units: all rotations'
+    /// masks for shape packing, oriented profiles for fast packing; then a
+    /// rectangle per instance. Charts are rotated in texels, then
+    /// downsampled, so blocks line up with the rotated chart.
     fn rasterize(&self, prep: &mut Prepared, s: f64) {
-        if self.method != Packing::Shape || !prep.masks.is_empty() {
+        if !prep.masks.is_empty() || !prep.profiles.is_empty() {
             return;
         }
         let b = self.block;
-        prep.masks = par::map_ref(self.charts, |c| {
-            let m = chart_masks(
-                c.uvs,
-                c.tris,
-                c.size,
-                chart_density(c.size, s, self.max_chart_size),
-                self.padding,
-                self.allow_rotation,
-            );
-            if b > 1 {
-                ChartMasks {
-                    rot: m.rot.iter().map(|r| r.downsample(b)).collect(),
-                }
-            } else {
-                m
+        let instances = prep.sizes[self.charts.len()..]
+            .iter()
+            .map(|&(w, h)| (w / b, h / b));
+        match self.method {
+            Packing::Shape => {
+                prep.masks = par::map_ref(self.charts, |c| {
+                    let m = chart_masks(
+                        c.uvs,
+                        c.tris,
+                        c.size,
+                        chart_density(c.size, s, self.max_chart_size),
+                        self.padding,
+                        self.allow_rotation,
+                    );
+                    if b > 1 {
+                        ChartMasks {
+                            rot: m.rot.iter().map(|r| r.downsample(b)).collect(),
+                        }
+                    } else {
+                        m
+                    }
+                });
+                prep.masks.extend(instances.map(|(w, h)| ChartMasks {
+                    rot: vec![Mask::rect(w, h)],
+                }));
             }
-        });
-        prep.masks.extend(
-            prep.sizes[self.charts.len()..]
-                .iter()
-                .map(|&(w, h)| ChartMasks {
-                    rot: vec![Mask::rect(w / b, h / b)],
-                }),
-        );
+            Packing::Fast => {
+                prep.profiles = par::map_ref(self.charts, |c| {
+                    let s = chart_density(c.size, s, self.max_chart_size);
+                    chart_profile(c.uvs, c.tris, c.size, s, self.padding)
+                        .oriented(self.allow_rotation)
+                        .downsample(b)
+                });
+                prep.profiles
+                    .extend(instances.map(|(w, h)| Profile::rect(w, h)));
+            }
+        }
     }
 
     /// Places everything on at most `max_pages` pages of `width × height`
@@ -229,11 +242,7 @@ impl Packer<'_> {
             height / b
         };
         let mut layout = match self.method {
-            Packing::Rect => {
-                let rects: Vec<(u32, u32)> =
-                    prep.sizes.iter().map(|&(w, h)| (w / b, h / b)).collect();
-                pack_rects(&rects, &prep.rotatable, width / b, height, max_pages)?
-            }
+            Packing::Fast => pack_folded(&prep.profiles, width / b, height, max_pages)?,
             Packing::Shape => pack_shapes(&prep.masks, width / b, height, max_pages)?,
         };
         if b > 1 {
@@ -396,23 +405,21 @@ fn pack_auto(p: &Packer<'_>, size: u32) -> Result<PackResult, Error> {
     };
     let full = size as f64 * size as f64;
     let mut best = None;
-    let (mut lo, mut hi);
-    if p.method == Packing::Rect {
-        (lo, hi) = (0.0, (full / p.bbox_area()).sqrt());
-    } else {
-        // Rectangles are a valid shape packing, so the skyline result is a
-        // good lower bound; 100% coverage bounds it from above.
-        let rect = Packer {
-            method: Packing::Rect,
+    // 100% coverage bounds the density from above.
+    let (mut lo, mut hi) = (0.0, (full / p.area()).sqrt());
+    if p.method == Packing::Shape {
+        // A fast packing is a valid shape packing, so its density is a good
+        // lower bound.
+        let fast = Packer {
+            method: Packing::Fast,
             ..*p
         };
-        lo = match pack_auto(&rect, size) {
+        lo = match pack_auto(&fast, size) {
             Ok(r) if r.pages == 1 => r.texels_per_unit,
             _ => 0.0,
         };
-        hi = (full / p.area()).sqrt();
         // Greedy placement isn't monotone in density, so shapes can fail
-        // where rectangles fit: back off a little a few times, then leave it
+        // where folding fits: back off a little a few times, then leave it
         // to the bisection.
         for _ in 0..8 {
             if !(lo > 0.0) {
@@ -473,7 +480,7 @@ pub(crate) fn pack_unbounded(p: &Packer<'_>, s: f64, cap: u32) -> Result<PackRes
     let fill = if p.method == Packing::Shape {
         0.8
     } else {
-        1.15
+        0.95
     };
     let max_side = r.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(1);
     let trial = |k: usize| {

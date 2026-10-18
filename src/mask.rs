@@ -6,6 +6,7 @@
 //! hits an occupied texel, so charts can nest into each other's concavities
 //! and holes instead of reserving their whole bounding rectangle.
 
+use crate::fold::Profile;
 use crate::geom::V2;
 
 /// Texel extent of a chart's content box at density `s`. Chart UVs (in world
@@ -52,7 +53,8 @@ pub(crate) struct Mask {
 }
 
 impl Mask {
-    fn row(&self, r: u32) -> &[[u32; 2]] {
+    /// Spans of row `r`.
+    pub(crate) fn row(&self, r: u32) -> &[[u32; 2]] {
         &self.spans[self.row_start[r as usize] as usize..self.row_start[r as usize + 1] as usize]
     }
 
@@ -271,6 +273,63 @@ pub(crate) fn chart_masks(
     padding: u32,
     all_rotations: bool,
 ) -> ChartMasks {
+    let m0 = Mask::from_bits(&chart_bits(uvs, tris, size, s, padding));
+    let rot = if all_rotations {
+        let m1 = m0.rotate90();
+        let (m2, m3) = (m0.rotate180(), m1.rotate180());
+        vec![m0, m1, m2, m3]
+    } else {
+        vec![m0]
+    };
+    ChartMasks { rot }
+}
+
+/// The [`Profile`] of a chart's unrotated padded mask (as from
+/// [`chart_masks`]), read straight off the bitmap a word at a time.
+pub(crate) fn chart_profile(
+    uvs: &[V2],
+    tris: &[[u32; 3]],
+    size: V2,
+    s: f64,
+    padding: u32,
+) -> Profile {
+    let bits = chart_bits(uvs, tris, size, s, padding);
+    let (w, h, n) = (bits.w, bits.h, bits.words);
+    let mut left = vec![w; h as usize];
+    let mut right = vec![0; h as usize];
+    let mut top = vec![h; w as usize];
+    let mut bot = vec![0; w as usize];
+    for y in 0..h {
+        let row = &bits.data[y as usize * n..(y as usize + 1) * n];
+        if let Some(k) = row.iter().position(|&x| x != 0) {
+            left[y as usize] = k as u32 * 64 + row[k].trailing_zeros();
+            let k = row.iter().rposition(|&x| x != 0).expect("a word is set");
+            right[y as usize] = k as u32 * 64 + 64 - row[k].leading_zeros();
+        }
+    }
+    // A column's top (bottom) is the first row, from above (below), where
+    // its bit is set and wasn't in any row before.
+    let first_rows = |rows: &mut dyn Iterator<Item = u32>, out: &mut [u32], end: bool| {
+        let mut seen = vec![0u64; n];
+        for y in rows {
+            for (k, s) in seen.iter_mut().enumerate() {
+                let mut new = bits.data[y as usize * n + k] & !*s;
+                *s |= new;
+                while new != 0 {
+                    out[k * 64 + new.trailing_zeros() as usize] = y + end as u32;
+                    new &= new - 1;
+                }
+            }
+        }
+    };
+    first_rows(&mut (0..h), &mut top, false);
+    first_rows(&mut (0..h).rev(), &mut bot, true);
+    Profile::from_extents(w, h, top, bot, left, right)
+}
+
+/// A chart rasterized conservatively (every texel its triangles touch) at
+/// density `s`, then dilated by `padding`.
+fn chart_bits(uvs: &[V2], tris: &[[u32; 3]], size: V2, s: f64, padding: u32) -> Bits {
     let (cw, ch) = content_size(size, s);
     let (w, h) = (
         cw.saturating_add(padding.saturating_mul(2)),
@@ -302,16 +361,7 @@ pub(crate) fn chart_masks(
             }
         }
     }
-    let bits = dilate(&bits, padding);
-    let m0 = Mask::from_bits(&bits);
-    let rot = if all_rotations {
-        let m1 = m0.rotate90();
-        let (m2, m3) = (m0.rotate180(), m1.rotate180());
-        vec![m0, m1, m2, m3]
-    } else {
-        vec![m0]
-    };
-    ChartMasks { rot }
+    dilate(&bits, padding)
 }
 
 /// X range of a triangle clipped to the horizontal slab `y0 <= y <= y1`.

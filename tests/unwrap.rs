@@ -160,15 +160,15 @@ fn output_is_deterministic() {
         },
         ..Options::default()
     };
-    let rect = Options {
-        packing: Packing::Rect,
+    let fast = Options {
+        packing: Packing::Fast,
         density: Density::Fixed {
             texels_per_unit: 40.0,
             page_size: Some(512),
         },
         ..Options::default()
     };
-    for opts in [Options::default(), fixed, rect] {
+    for opts in [Options::default(), fixed, fast] {
         let reference = generate(&inputs, &opts).unwrap();
         for threads in [1, 2, 3, 8] {
             let pool = rayon::ThreadPoolBuilder::new()

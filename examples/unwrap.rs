@@ -2,7 +2,7 @@
 //! drawing of each atlas page.
 //!
 //! ```text
-//! cargo run --release --example unwrap -- [--rect] [--flat] [--block-align]
+//! cargo run --release --example unwrap -- [--fast] [--flat] [--block-align]
 //!     [--texels-per-unit X] [--max-chart-size N] [--padding N] [--page-size N]
 //!     [--instances 1,2,0.5] [--keep-uvs] [input.obj] [output_prefix]
 //! ```
@@ -92,8 +92,8 @@ fn flatten(positions: &[[f32; 3]], indices: &[u32]) -> (Vec<[f32; 3]>, Vec<u32>)
 fn main() {
     let mut opts = uvunwrap::Options::default();
     let mut args: Vec<String> = env::args().skip(1).collect();
-    if let Some(i) = args.iter().position(|a| a == "--rect") {
-        opts.packing = uvunwrap::Packing::Rect;
+    if let Some(i) = args.iter().position(|a| a == "--fast") {
+        opts.packing = uvunwrap::Packing::Fast;
         args.remove(i);
     }
     let flat = args

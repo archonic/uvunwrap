@@ -109,7 +109,7 @@ fn segments_cross(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> bool {
 #[test]
 fn block_align_gives_each_chart_its_own_blocks() {
     let (a, b) = (torus(32, 16), cube());
-    for packing in [Packing::Shape, Packing::Rect] {
+    for packing in [Packing::Shape, Packing::Fast] {
         for opts in [
             Options {
                 block_align: true,
@@ -216,7 +216,7 @@ fn every_packer_configuration_is_valid() {
             page_size: Some(128),
         },
     ];
-    for packing in [Packing::Shape, Packing::Rect] {
+    for packing in [Packing::Shape, Packing::Fast] {
         for allow_rotation in [true, false] {
             for padding in [0, 1, 3] {
                 for density in densities {

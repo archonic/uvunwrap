@@ -79,8 +79,11 @@ cargo run --release --example unwrap -- model.obj out/model
    rasterized (conservatively, dilated by the padding) and packed by shape, so
    they nest into each other's concavities and holes, with 90° rotations.
    Texel density is automatic (fit one page) or fixed (one growing page, or
-   multiple fixed-size pages). `Packing::Rect` packs bounding rectangles with
-   a skyline packer instead: faster, but less dense. `max_chart_size` scales
+   multiple fixed-size pages). `Packing::Fast` instead folds charts into rows
+   and pushes each row up against the previous ones by the charts' outlines
+   (after TABI, Gu, Vining & Sheffer 2026): milliseconds for thousands of
+   charts, but it can't use holes or the space under overhangs, so atlases
+   are less dense. `max_chart_size` scales
    oversized charts down; `block_align` gives every chart its own 4×4 texel
    blocks for block-compressed lightmaps.
 
@@ -129,10 +132,9 @@ repacking, progress/cancellation and determinism (across thread counts and,
 without `direct-solver`, across platforms) are in place and tested; the API
 may still change before 0.1.
 
-- **0.1: a fast packer.** Replace `Packing::Rect` with a fold-and-push
-  packer after TABI (Gu, Vining & Sheffer 2026) that pushes charts by their
-  actual outlines: near-`Shape` quality in milliseconds for thousands of
-  charts.
+- **0.1: finish the fast packer.** `Packing::Fast` (fold-and-push after
+  TABI, Gu, Vining & Sheffer 2026) replaces the rectangle skyline; it still
+  needs fewer density trials before release.
 - **Determinism** across CPU architectures with the fast direct solver too.
 - **Integrations** (after 0.1): a Bevy crate.
 

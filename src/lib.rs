@@ -52,6 +52,7 @@
 // `!(x > 0.0)` is deliberate throughout: unlike `x <= 0.0`, it also rejects NaN.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
+mod fold;
 mod geom;
 mod mask;
 mod pack;
@@ -59,7 +60,6 @@ mod par;
 mod param;
 mod progress;
 mod segment;
-mod skyline;
 mod solver;
 mod tile;
 mod topology;
@@ -227,9 +227,11 @@ pub enum Packing {
     /// concavities and holes. Denser atlases; slower to pack.
     #[default]
     Shape,
-    /// Pack chart bounding rectangles with a skyline packer. Much faster,
-    /// but wastes the space around non-rectangular charts.
-    Rect,
+    /// Fold charts into rows sorted by height and push each row up against
+    /// the previous ones, compacting by each chart's per-row and per-column
+    /// extent (TABI-style). Milliseconds even for thousands of charts, but
+    /// can't nest charts into holes or deep concavities.
+    Fast,
 }
 
 impl Default for Options {

@@ -129,19 +129,31 @@ use case.
   Cholesky on normal equations (AᵀA assembled directly in CSC;
   `direct-solver` feature) with Jacobi-preconditioned CGLS fallback.
 - `src/mask.rs`: conservative chart rasterization + padding dilation into
-  per-row span masks (4 rotations derived exactly), and the page bitset with
-  per-row free runs used for exact bottom-left placement search.
+  per-row span masks (4 rotations derived exactly) or, for fast packing,
+  straight into a `Profile` (`chart_profile`, word-at-a-time off the
+  bitmap), and the page bitset with per-row free runs used for exact
+  bottom-left placement search.
 - `src/pack.rs`: `prepare` (sizes and tile layouts, then `rasterize` masks
   only once sizes pass the page and texel-budget checks), `place` (shape or
-  rect), and one function per mode: `pack_auto` (bisection to fit one page,
-  seeded by the rect result with at most 8 back-off steps, cropped to used
+  fast), and one function per mode: `pack_auto` (bisection to fit one page;
+  shape is seeded by the fast result with at most 8 back-off steps; cropped to used
   height, multi-page fallback), `pack_unbounded` (fixed density, 7 widths in
   parallel on one set of masks, smallest area), `pack_pages` (fixed density,
   fixed pages). Per-chart density (`chart_density`) applies
   `max_chart_size`; `block_align` packs in 4×4 block units
-  (`Mask::downsample`, rects rounded up) and scales placements back.
-- `src/skyline.rs`: rectangle packer (`pack_rects`) for `Packing::Rect` and
-  the auto-mode lower bound.
+  (`Mask::downsample`/`Profile::downsample` after rotating in texels,
+  sizes rounded up) and scales placements back.
+- `src/fold.rs`: `Packing::Fast`, TABI-style fold-and-push (`pack_folded`).
+  `Profile`: per-column top/bottom and per-row left/right extents of a
+  padded mask, rotated exactly; `oriented` turns charts taller than wide,
+  then 180° if that leaves more free space bottom/right (no mirroring).
+  Items sorted by height fold into rows (`fold`: bounding boxes abutting, or
+  compacted against a per-row frontier of all previous items in the row),
+  are pushed up against the page frontline (`push`), and colliding pairs in
+  a row are lowered to equal height until none collide (exact version of
+  TABI Alg. 1). Per row: both directions × full width / knee concavity
+  (`Knee`, Alg. 2) × compacted or not; more items wins, then lowest
+  (max, sum) frontline. A row that overflows starts a new page.
 - `src/tile.rs`: instanced meshes: `layout_tile` packs a tile's charts once
   (`pack_unbounded` at the smallest instance's density, capped so the
   largest instance fits the page); each instance becomes one unrotatable
@@ -160,13 +172,13 @@ use case.
 - `benches/generate.rs`: criterion (`cargo bench`; `-- --test` runs each case
   once): tori and a 2000-triangle soup plus
   `models/{spot,beetle,bunny,armadillo,nefertiti}.obj` when present, each
-  with shape, rect, fixed density and four instances, plus `repack` for
+  with shape, fast, fixed density and four instances, plus `repack` for
   models with UVs.
 
 ## Commands
 
 - `cargo test` and `cargo test --no-default-features` (both must pass)
-- `cargo run --release --example unwrap -- [--rect] model.obj out/model`
+- `cargo run --release --example unwrap -- [--fast] model.obj out/model`
 - Test models: https://github.com/alecjacobson/common-3d-test-models (`data/*.obj`),
   downloaded into the gitignored `models/` dir (bunny is `stanford-bunny.obj`).
 - Render atlas SVGs: `rsvg-convert -w 800 out/x_page0.svg -o out/x.png`
@@ -246,6 +258,16 @@ a slowdown is real, compare both builds with
 - Authored seams as a soft segmentation cost do nothing below weight 2:
   growth only stops at `MAX_COST`, so costs just reorder growth (spot followed
   10% of UV seams at weight 0–1, 90% at 2). Hence hard cuts in topology.
+- Fast packing (2026-10-18), tried and dropped:
+  - computing profiles straight from triangles (row and column slab passes,
+    no bitmap): exact, but 2× slower than rasterizing; the bitmap read
+    word-at-a-time is what `chart_profile` does;
+  - no rows, each chart dropped at the column where it lands highest against
+    the frontline: +1–5 points on single models, −3–4 on tori300, 3–40×
+    slower (all four rotations: slower still, no better). The rows aren't
+    what limits density; the frontline is;
+  - when compacted and uncompacted folds fit as many charts, comparing them
+    after pushing instead of TABI's "uncompacted": no change (kept, cheap).
 - Remaining costs: LSCM solves (successful + failed) dominate; igea's
   critical path is one 98K-face chart that fails and is re-solved in halves.
   Packing ≈ 9 sequential density trials.
@@ -263,7 +285,9 @@ a slowdown is real, compare both builds with
    `torus_hash` cdylib example) without `direct-solver`. Done (green 2026-10-18). The example's torus must not
    use libm trig either (it once used `f32::sin`/`cos`, and glibc vs
    macOS/Windows split the hash).
-2. Replace `Packing::Rect` (rectangle skyline) with a TABI-style
+2. In progress (2026-10-18): `Packing::Fast` (`src/fold.rs`) replaced
+   `Packing::Rect` (skyline); remaining items are at the end of this step.
+   Replace `Packing::Rect` (rectangle skyline) with a TABI-style
    fold-and-push packer, so there are still exactly two packers: `Shape`
    (exhaustive raster search, best quality, default) and the new fast one.
    Reference: Gu, Vining & Sheffer, "TABI: Tight and Balanced Interactive
@@ -294,6 +318,23 @@ a slowdown is real, compare both builds with
    Evaluate against `Shape` on the benchmark models and the 300-torus scene
    (1024/2048/4096 pages): utilization (treat differences under ~3 points
    as noise) and time. Target: milliseconds for thousands of charts.
+   First results (multi-core packing-stage time, utilization; old skyline
+   in brackets): spot 7 ms 61% [61%], beetle 6 ms 43% [40%], bunny 19 ms
+   53% [46%], armadillo 24 ms 48% [44%], nefertiti 26 ms 50% [45%], igea
+   50 ms 52% [51%]; tori300 at 1024/2048/4096: 33/51/86 ms, 40/52/60%
+   [38/49/55%] vs shape 3.5/12.8/28.8 s, 40/56/67%. Shape is 7–15 points
+   denser on single models: frontline packing can't use the space under
+   overhangs. Remaining:
+   - Fewer density trials: rasterizing at each of ~10 bisection densities
+     is most of the time (folding is < 0.3 ms per trial). E.g. predict the
+     fitting density from an unbounded-height fold (`s · sqrt(H / used)`)
+     and bisect only a narrow bracket.
+   - The shape packer's seed is now a fast `pack_auto` (~10–30 ms more on
+     the models than the skyline seed); make it cheap again (coarser
+     tolerance or the prediction above).
+   - Knees never trigger on the single models (no 10%-of-page height jump
+     between neighbours); check where they help (tori, mixed scenes).
+   - Tune `pack_unbounded`'s fill estimate for fast (0.95, a guess).
    Then publish 0.1.
 
 ### After 0.1

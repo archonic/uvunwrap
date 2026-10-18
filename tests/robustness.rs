@@ -172,7 +172,7 @@ fn random_options(rng: &mut Rng) -> Options {
         packing: if rng.coin() {
             Packing::Shape
         } else {
-            Packing::Rect
+            Packing::Fast
         },
         density: match fixed.then(|| rng.range(4.0, 40.0)) {
             Some(texels_per_unit) => Density::Fixed {

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "uvunwrap"
+description = "Fast automatic UV unwrapping and atlas packing for lightmaps and baking, written in Rust"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["uv", "unwrap", "lightmap", "atlas", "mesh", "blender"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Topic :: Multimedia :: Graphics :: 3D Rendering",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/archonic/uvunwrap"
+Documentation = "https://github.com/archonic/uvunwrap/tree/main/python"
+
+[tool.maturin]
+module-name = "uvunwrap"

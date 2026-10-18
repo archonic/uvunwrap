@@ -140,6 +140,15 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   `inputs`, `polygons`, `packing`, `instances`, `progress`, `robustness`
   (hostile inputs and a seeded random mesh/options property test, half
   the seeds with bent quads as polygons).
+- `python/`: Python bindings (workspace crate `uvunwrap-python`, not on
+  crates.io; PyPI package and module `uvunwrap`, built with maturin, abi3
+  wheels for Python ≥ 3.11). `src/lib.rs`: `Mesh` (inputs from any
+  buffer-protocol object or flat/nested sequence, copied into an
+  `Arc<MeshData>`), `generate` (GIL released) and `start` (a `Job` on a
+  std thread: `progress`, `done`, `cancel()`, `result(timeout)`), outputs as
+  `array.array`s including `corner_uvs` (UV per triangle corner, for
+  per-loop UV maps such as Blender's), `UnwrapError`/`Cancelled`.
+  `uvunwrap.pyi`: type stubs, shipped in the wheel. `tests/`: pytest.
 - `examples/unwrap.rs`: OBJ in (one vertex per `v/vt/vn` corner, like an
   engine import; `--flat` splits every face) → OBJ with `vt` + SVG per page.
 - `examples/torus_hash.rs` (+ `.mjs`): cdylib exporting the torus hash, for
@@ -164,6 +173,13 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   `models/` dir (pinned commit, SHA-256 checked; upstream
   `stanford-bunny.obj` is saved as `bunny.obj`).
 - `cargo bench` (`-- --test` runs each case once).
+- Python bindings: in a virtualenv with `maturin pytest numpy`, from
+  `python/`: `maturin develop --release` then `pytest -q tests`; clippy with
+  `cargo clippy -p uvunwrap-python --all-targets -- -D warnings`. CI builds
+  the wheel and runs the tests on Linux/macOS/Windows with Python 3.11 and
+  3.13 (the version Blender bundles). To try it in Blender, unzip a wheel
+  from `maturin build --release` and put that directory on `sys.path`
+  (`blender -b --python script.py`).
 - Render atlas SVGs: `rsvg-convert -w 800 out/x_page0.svg -o out/x.png`
   (`qlmanage` hangs).
 
@@ -185,12 +201,14 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
 
 ## Conventions
 
-- Run `cargo fmt` (default settings, no `rustfmt.toml`) before every commit;
-  `cargo fmt --check` must pass.
+- Run `cargo fmt --all` (default settings, no `rustfmt.toml`) before every
+  commit; `cargo fmt --all --check` must pass.
 - Commits are authored by Joshua Flark <joshuajmark@gmail.com>, with no
   `Co-Authored-By` or other AI attribution trailers. Prefer small commits,
   each of which passes all checks on its own.
 - Never commit downloaded models, `out/` or `TODO.md`.
+- The Python bindings track the crate: a crate API change updates them in
+  the same commit, and `python/Cargo.toml`'s version matches the crate's.
 - Public API: output types (`Atlas`, `OutputMesh`, `OutputVertex`,
   `InstanceRect`, `Progress`) and `Density`, `Packing`, `Stage`, `Error` are
   `#[non_exhaustive]`. `Options` and `MeshInput` are not (that would forbid

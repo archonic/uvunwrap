@@ -39,3 +39,8 @@ harness = false
 [[example]]
 name = "torus_hash"
 crate-type = ["cdylib"]
+
+# The Python bindings (`python/`, published to PyPI with maturin) build in
+# this workspace; commands run at the root still only build the crate.
+[workspace]
+members = ["python"]

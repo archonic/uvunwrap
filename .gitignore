@@ -2,3 +2,5 @@
 /out
 /models
 /TODO.md
+__pycache__/
+/python/dist

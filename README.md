@@ -133,8 +133,8 @@ without `direct-solver`, across platforms) are in place and tested; the API
 may still change before 0.1.
 
 - **0.1: finish the fast packer.** `Packing::Fast` (fold-and-push after
-  TABI, Gu, Vining & Sheffer 2026) replaces the rectangle skyline; it still
-  needs fewer density trials before release.
+  TABI, Gu, Vining & Sheffer 2026) replaces the rectangle skyline; a few
+  tuning items remain before release.
 - **Determinism** across CPU architectures with the fast direct solver too.
 - **Integrations** (after 0.1): a Bevy crate.
 

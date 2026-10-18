@@ -139,7 +139,9 @@ use case.
   shape is seeded by the fast result with at most 8 back-off steps; cropped to used
   height, multi-page fallback), `pack_unbounded` (fixed density, 7 widths in
   parallel on one set of masks, smallest area), `pack_pages` (fixed density,
-  fixed pages). Per-chart density (`chart_density`) applies
+  fixed pages). Fast trials fold onto an unbounded page (same rows until
+  one overflows), so each also gives the height needed, and the next trial
+  jumps to `s · sqrt(page / used)` when that's inside the bracket. Per-chart density (`chart_density`) applies
   `max_chart_size`; `block_align` packs in 4×4 block units
   (`Mask::downsample`/`Profile::downsample` after rotating in texels,
   sizes rounded up) and scales placements back.
@@ -267,7 +269,13 @@ a slowdown is real, compare both builds with
     slower (all four rotations: slower still, no better). The rows aren't
     what limits density; the frontline is;
   - when compacted and uncompacted folds fit as many charts, comparing them
-    after pushing instead of TABI's "uncompacted": no change (kept, cheap).
+    after pushing instead of TABI's "uncompacted": no change (kept, cheap);
+  - density search beyond predicting `s · sqrt(page / used)`: starting at
+    0.7 of the bound, aiming 3% past the edge until bracketed, then
+    interpolating between the bracket's heights (with Illinois-style
+    bisection after two same-side results): 133 vs 136 trials over 21
+    model/page cases, i.e. nothing. Heights step by whole rows near the
+    edge, so the last ~2% to 0.25% costs ~3 bisection steps regardless.
 - Remaining costs: LSCM solves (successful + failed) dominate; igea's
   critical path is one 98K-face chart that fails and is re-solved in halves.
   Packing ≈ 9 sequential density trials.
@@ -324,14 +332,11 @@ a slowdown is real, compare both builds with
    50 ms 52% [51%]; tori300 at 1024/2048/4096: 33/51/86 ms, 40/52/60%
    [38/49/55%] vs shape 3.5/12.8/28.8 s, 40/56/67%. Shape is 7–15 points
    denser on single models: frontline packing can't use the space under
-   overhangs. Remaining:
-   - Fewer density trials: rasterizing at each of ~10 bisection densities
-     is most of the time (folding is < 0.3 ms per trial). E.g. predict the
-     fitting density from an unbounded-height fold (`s · sqrt(H / used)`)
-     and bisect only a narrow bracket.
-   - The shape packer's seed is now a fast `pack_auto` (~10–30 ms more on
-     the models than the skyline seed); make it cheap again (coarser
-     tolerance or the prediction above).
+   overhangs. Rasterizing at each density trial is most of the time
+   (folding is < 0.3 ms per trial); predicting the density from the
+   height used cut trials from ~10 to 5–8 (fast packing time −20–55%:
+   spot 5 ms, nefertiti 19 ms, igea 41 ms, tori300 21/23/60 ms), which
+   also made the shape packer's seed cheap again. Remaining:
    - Knees never trigger on the single models (no 10%-of-page height jump
      between neighbours); check where they help (tori, mixed scenes).
    - Tune `pack_unbounded`'s fill estimate for fast (0.95, a guess).

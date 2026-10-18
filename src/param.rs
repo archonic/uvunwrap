@@ -8,7 +8,10 @@
 //! without trying). Single triangles always succeed, so this
 //! always terminates with a valid parameterization.
 
-use crate::geom::*;
+use crate::geom::{
+    add3, angle, bounds2, convex_hull, cross3, dot3, len3, min_area_rect_dir, normalize3, rotate,
+    scale3, signed_area, sub3, triangles_overlap, V2,
+};
 use crate::par;
 use crate::progress::{Ctx, Stage};
 use crate::solver::{least_squares, SparseRows};
@@ -30,6 +33,31 @@ pub(crate) struct Chart {
     pub size: V2,
     /// Total surface area in world units.
     pub area: f64,
+}
+
+/// What every chart of one mesh is parameterized with.
+struct Job<'a> {
+    topo: &'a Topology,
+    max_distortion: f64,
+    ctx: &'a Ctx<'a>,
+    total: usize,
+}
+
+impl Job<'_> {
+    /// Reports the chart's faces as done and finalizes it.
+    fn done(
+        &self,
+        faces: Vec<u32>,
+        verts: Vec<u32>,
+        local: Vec<[u32; 3]>,
+        uvs: Vec<V2>,
+    ) -> Vec<Chart> {
+        // A cancellation is noticed by the caller.
+        let _ = self
+            .ctx
+            .advance(Stage::Parameterizing, faces.len(), Some(self.total));
+        vec![finalize(self.topo, faces, verts, local, uvs)]
+    }
 }
 
 /// Parameterizes every group in parallel, reporting finished faces to `ctx`
@@ -92,30 +120,6 @@ fn island(job: &Job, faces: Vec<u32>, face_uvs: &[[V2; 3]]) -> Vec<Chart> {
         return job.done(faces, verts, local, uvs);
     }
     parameterize_group(job, faces)
-}
-
-struct Job<'a> {
-    topo: &'a Topology,
-    max_distortion: f64,
-    ctx: &'a Ctx<'a>,
-    total: usize,
-}
-
-impl Job<'_> {
-    /// Reports the chart's faces as done and finalizes it.
-    fn done(
-        &self,
-        faces: Vec<u32>,
-        verts: Vec<u32>,
-        local: Vec<[u32; 3]>,
-        uvs: Vec<V2>,
-    ) -> Vec<Chart> {
-        // A cancellation is noticed by the caller.
-        let _ = self
-            .ctx
-            .advance(Stage::Parameterizing, faces.len(), Some(self.total));
-        vec![finalize(self.topo, faces, verts, local, uvs)]
-    }
 }
 
 /// Why a parameterization was rejected.
@@ -181,7 +185,8 @@ fn parameterize_group(job: &Job, faces: Vec<u32>) -> Vec<Chart> {
 /// `2π - Σ angles` over its interior vertices.
 fn total_curvature(topo: &Topology, verts: &[u32], local: &[[u32; 3]]) -> f64 {
     let n = verts.len();
-    let mut angle = vec![0.0; n];
+    // Sum of the corner angles at each vertex.
+    let mut angle_sum = vec![0.0; n];
     // Edge use count parity marks boundary edges (used by one face).
     let mut edges: HashMap<(u32, u32), bool> = HashMap::with_capacity(local.len() * 2);
     for t in local {
@@ -189,7 +194,7 @@ fn total_curvature(topo: &Topology, verts: &[u32], local: &[[u32; 3]]) -> f64 {
         for k in 0..3 {
             let a = sub3(p[(k + 1) % 3], p[k]);
             let b = sub3(p[(k + 2) % 3], p[k]);
-            angle[t[k] as usize] += crate::geom::angle(len3(cross3(a, b)), dot3(a, b));
+            angle_sum[t[k] as usize] += angle(len3(cross3(a, b)), dot3(a, b));
             let (u, v) = (t[k], t[(k + 1) % 3]);
             let e = edges.entry((u.min(v), u.max(v))).or_insert(false);
             *e = !*e;
@@ -204,7 +209,7 @@ fn total_curvature(topo: &Topology, verts: &[u32], local: &[[u32; 3]]) -> f64 {
     }
     (0..n)
         .filter(|&i| !boundary[i])
-        .map(|i| std::f64::consts::TAU - angle[i])
+        .map(|i| std::f64::consts::TAU - angle_sum[i])
         .sum()
 }
 

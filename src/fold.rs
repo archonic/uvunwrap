@@ -247,16 +247,17 @@ struct Row {
     pos: Vec<(u32, u32)>,
     ltr: bool,
     frontline: Vec<u32>,
-    /// Lowest frontline over the whole page, and over the row's columns.
+    /// The frontline's deepest point (largest y) over the whole page, and
+    /// over the columns the row was folded into.
     height: u32,
     region_height: u32,
-    /// Sum of the frontline over the row's columns.
+    /// Sum of the frontline over the columns the row was folded into.
     region_sum: u64,
 }
 
 impl Row {
-    /// Lower is better: the lowest point (balance), then the area above the
-    /// frontline (tightness).
+    /// Lower is better: the deepest point (balance), then the area above
+    /// the frontline (tightness).
     fn rank(&self) -> (u32, u64) {
         (self.region_height, self.region_sum)
     }
@@ -511,10 +512,13 @@ pub(crate) fn pack_folded(
         empty: true,
     };
     let mut placements = vec![Placement::default(); items.len()];
-    let mut shelves = vec![new_shelf()];
+    let mut shelves: Vec<Shelf> = Vec::new();
     let mut start = 0;
     while start < items.len() {
-        let shelf = shelves.last_mut().expect("at least one page");
+        if shelves.is_empty() {
+            shelves.push(new_shelf());
+        }
+        let shelf = shelves.last_mut().expect("pushed above");
         let (row, knee) = folder.next_row(shelf, start);
         if row.height > height {
             if shelf.empty || shelves.len() >= max_pages {
@@ -524,7 +528,7 @@ pub(crate) fn pack_folded(
             continue;
         }
         let page = shelves.len() as u32 - 1;
-        let shelf = shelves.last_mut().expect("at least one page");
+        let shelf = shelves.last_mut().expect("pushed above");
         for (&i, &(x, y)) in folder.order[start..row.end].iter().zip(&row.pos) {
             placements[i] = Placement {
                 page,
@@ -541,9 +545,6 @@ pub(crate) fn pack_folded(
             empty: false,
         };
         start = row.end;
-    }
-    if items.is_empty() {
-        shelves.clear();
     }
     Some(Layout {
         placements,

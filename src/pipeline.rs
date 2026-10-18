@@ -271,20 +271,21 @@ fn assemble_mesh(
 /// texels of the page or tile it was placed on), given its placement and
 /// texel density.
 fn place_chart(
-    ch: &param::Chart,
+    chart: &param::Chart,
     placement: pack::Placement,
     density: f64,
     pad: f64,
     origin: V2,
     extent: V2,
 ) -> Vec<[f32; 2]> {
-    let (cw, chh) = raster::content_size(ch.size, density);
-    ch.uvs
+    let (cw, ch) = raster::content_size(chart.size, density);
+    chart
+        .uvs
         .iter()
         .map(|&[x, y]| {
             // Quarter-turn rotations keep orientation (no mirroring).
             let [x, y] =
-                raster::rotate_texel([x * density, y * density], placement.rotation, cw, chh);
+                raster::rotate_texel([x * density, y * density], placement.rotation, cw, ch);
             let tx = placement.x as f64 + pad + x - origin[0];
             let ty = placement.y as f64 + pad + y - origin[1];
             [

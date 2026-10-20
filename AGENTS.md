@@ -163,7 +163,8 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   wasm32-unknown-unknown in CI (no stdout there); `examples/common/mod.rs`
   holds the torus and hash both examples share.
 - `benches/generate.rs`: criterion (`cargo bench`; `-- --test` runs each case
-  once): tori and a 2000-triangle soup plus
+  once): tori, a 2000-triangle soup and `uneven204` (4 long strips and 200
+  small rectangles, where fast packing's knees help) plus
   `models/{spot,beetle,bunny,armadillo,nefertiti,igea}.obj` when present, each
   with shape, fast, fixed density and four instances, plus `repack` for
   models with UVs.

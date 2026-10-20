@@ -102,6 +102,46 @@ fn soup(n: usize) -> Mesh {
     }
 }
 
+/// `tall` long strips and `small` small rectangles, unconnected flat quads:
+/// one chart each, of very uneven heights. Fast packing folds the next rows
+/// into the concavity beside the strips (a knee) here.
+fn uneven(tall: usize, small: usize) -> Mesh {
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 40) as f32 / (1u64 << 24) as f32
+    };
+    let mut sizes: Vec<(f32, f32)> = (0..tall)
+        .map(|_| (0.4 + 0.4 * next(), 6.0 + 4.0 * next()))
+        .collect();
+    sizes.extend((0..small).map(|_| {
+        let a = 0.3 + 0.9 * next();
+        (a, a * (0.6 + 0.8 * next()))
+    }));
+    let (mut positions, mut indices) = (Vec::new(), Vec::new());
+    // Side by side, so no two quads share a vertex position.
+    let mut x = 0.0;
+    for (w, h) in sizes {
+        let base = positions.len() as u32;
+        positions.extend([
+            [x, 0.0, 0.0],
+            [x + w, 0.0, 0.0],
+            [x + w, h, 0.0],
+            [x, h, 0.0],
+        ]);
+        indices.extend([0, 1, 2, 0, 2, 3].map(|k| base + k));
+        x += w + 1.0;
+    }
+    Mesh {
+        name: format!("uneven{}", tall + small),
+        positions,
+        indices,
+        uvs: None,
+    }
+}
+
 /// Loads an OBJ with one vertex per distinct `v/vt` corner, keeping the
 /// `vt` coordinates if every corner has one.
 fn load_obj(name: &str) -> Option<Mesh> {
@@ -161,7 +201,7 @@ fn load_obj(name: &str) -> Option<Mesh> {
 }
 
 fn bench(c: &mut Criterion) {
-    let mut meshes = vec![torus(64, 32), torus(256, 128), soup(2000)];
+    let mut meshes = vec![torus(64, 32), torus(256, 128), soup(2000), uneven(4, 200)];
     for name in ["spot", "beetle", "bunny", "armadillo", "nefertiti", "igea"] {
         match load_obj(name) {
             Some(m) => meshes.push(m),

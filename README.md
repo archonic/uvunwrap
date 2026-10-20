@@ -128,16 +128,17 @@ for comparing builds.
 
 ## Performance
 
-1024×1024 page, 2 texels of padding, release build, Apple M5 (10 cores). Utilization
-is true surface area over atlas area.
+1024×1024 page, 2 texels of padding, release build, Apple M2 Pro (10 cores),
+best of 5 runs of the `unwrap` example. Utilization is true surface area over
+atlas area.
 
 | Model | Triangles | Charts | Single core | Multi-core | Utilization |
 |---|---|---|---|---|---|
-| Spot | 5.9K | 47 | 27 ms | 19 ms | 71% |
-| Stanford bunny | 69K | 58 | 0.19 s | 82 ms | 65% |
-| Armadillo | 100K | 257 | 0.40 s | 0.16 s | 60% |
-| Nefertiti | 100K | 456 | 0.74 s | 0.40 s | 64% |
-| Igea | 269K | 83 | 0.96 s | 0.48 s | 66% |
+| Spot | 5.9K | 47 | 42 ms | 23 ms | 71% |
+| Stanford bunny | 69K | 58 | 0.32 s | 0.13 s | 65% |
+| Armadillo | 100K | 257 | 0.59 s | 0.23 s | 60% |
+| Nefertiti | 100K | 456 | 1.10 s | 0.57 s | 64% |
+| Igea | 269K | 83 | 1.45 s | 0.60 s | 66% |
 
 `cargo bench` runs criterion benchmarks on procedural meshes, plus any of
 `spot`, `beetle`, `bunny`, `armadillo`, `nefertiti` and `igea` found in

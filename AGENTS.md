@@ -202,6 +202,11 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
 - Compare against the README's performance table (1024 page, padding 2).
   Utilization is true surface area / atlas area (stricter than xatlas,
   which counts rasterized texels).
+- Record the processor with every timing you write down (`TODO.md`, the
+  README, commit messages), at the level of "Apple M2 Pro" or "Apple M5"
+  (`sysctl -n machdep.cpu.brand_string` on macOS): benchmarks run on
+  different machines, and timings from different processors aren't
+  comparable.
 - Use best-of-N single-core runs (`RAYON_NUM_THREADS=1`); the dev machine
   is often loaded, so multi-core timings are noisy. Interleave runs of the
   two binaries being compared (a `git worktree` of the baseline commit

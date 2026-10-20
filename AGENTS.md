@@ -127,7 +127,11 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   a row are lowered to equal height until none collide (exact version of
   TABI Alg. 1). Per row: both directions × full width / knee concavity
   (`Knee`, Alg. 2) × compacted or not; more items wins, then lowest
-  (max, sum) frontline. A row that overflows starts a new page.
+  (max, sum) frontline. Beyond TABI: each placed row's `Pocket` (per column,
+  old frontline to the row's item tops) is filled with the largest remaining
+  items that fit (`Folder::fill`, `Pocket::fit`: exact, candidates are
+  columns as deep as the item's tallest column). A row that overflows
+  starts a new page.
 - `src/tile.rs`: instanced meshes: `layout_tile` packs a tile's charts once
   (`pack_unbounded` at the smallest instance's density, capped so the
   largest instance fits the page); each instance becomes one unrotatable

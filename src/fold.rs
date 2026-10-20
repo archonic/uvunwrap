@@ -15,8 +15,15 @@
 //! Alg. 4). Items are never mirrored, which would flip UV winding: TABI's
 //! reflections become a choice between an orientation and its 180° turn.
 //!
+//! A frontline can't reach the space under an overhang, so (beyond TABI)
+//! each placed row leaves a [`Pocket`]: per column, the gap between the
+//! frontline it was pushed against and its items' tops. The largest of the
+//! remaining items that fit go into it, each pushed up as far as it goes;
+//! most are small ones from the end of the order.
+//!
 //! [`Packing::Fast`]: crate::Packing::Fast
 
+use crate::mask::coarse_to_fine;
 use crate::pack::{Layout, Placement};
 use crate::raster::Bits;
 use std::cmp::Reverse;
@@ -268,6 +275,9 @@ struct Shelf {
     frontline: Vec<u32>,
     knee: Option<Knee>,
     used_width: u32,
+    /// One past the lowest row used (the frontline's deepest point, or
+    /// deeper once items fill the space below it).
+    used_height: u32,
     empty: bool,
 }
 
@@ -279,9 +289,45 @@ struct Folder<'a> {
     width: u32,
     /// Smallest height difference that makes a knee.
     knee_min: u32,
+    /// Per item, what pockets need to know.
+    fits: Vec<FitInfo>,
+    /// Page height (`u32::MAX`: unbounded).
+    height: u32,
 }
 
 impl Folder<'_> {
+    /// Fills `pocket` on `shelf` with the largest of `candidates` that fit,
+    /// one at a time, placing them on `page`; returns the others.
+    fn fill(
+        &self,
+        shelf: &mut Shelf,
+        pocket: &mut Pocket,
+        candidates: &[usize],
+        page: u32,
+        placements: &mut [Placement],
+    ) -> Vec<usize> {
+        let mut rest = Vec::with_capacity(candidates.len());
+        for &i in candidates {
+            let p = &self.items[i];
+            match pocket.fit(p, &self.fits[i], self.height) {
+                Some((x, y)) => {
+                    pocket.insert(p, x, y);
+                    placements[i] = Placement {
+                        page,
+                        x,
+                        y,
+                        rotation: p.rotation,
+                    };
+                    shelf.used_width = shelf.used_width.max(x + p.w);
+                    shelf.used_height = shelf.used_height.max(y + p.h);
+                    shelf.empty = false;
+                }
+                None => rest.push(i),
+            }
+        }
+        rest
+    }
+
     /// Folds items from `start` into one row within columns `[x0, x1)`,
     /// left to right or right to left, with each item touching the previous
     /// ones' bounding boxes or (`compact`) their row profiles. Returns the
@@ -487,6 +533,169 @@ impl Folder<'_> {
     }
 }
 
+/// What [`Pocket::fit`] needs of an item besides its profile.
+struct FitInfo {
+    /// The height of its tallest column, and that column.
+    tall: u32,
+    key: usize,
+    /// Its covered columns, ends and middle first: they usually decide (or
+    /// rule out) a position within the first few.
+    cols: Vec<u32>,
+}
+
+impl FitInfo {
+    fn new(p: &Profile) -> FitInfo {
+        let cols: Vec<u32> = coarse_to_fine(p.w)
+            .into_iter()
+            .filter(|&c| p.top[c as usize] < p.bot[c as usize])
+            .collect();
+        let (tall, key) = (0..p.w as usize)
+            .map(|c| (p.bot[c].saturating_sub(p.top[c]), c))
+            .max_by_key(|&(t, c)| (t, Reverse(c)))
+            .unwrap_or((0, 0));
+        FitInfo { tall, key, cols }
+    }
+}
+
+/// Free space on a page: per column from `x0`, the rows `[lo, hi)`. Items
+/// are pushed up against `lo` and must stay above `hi`.
+///
+/// Above a row, between it and the frontline it was pushed against (empty
+/// where the row has no item): everything placed before lies above `lo` and
+/// the row's items lie below `hi`, so an item within it overlaps nothing,
+/// and later rows, pushed against the frontline below the row, never reach
+/// it.
+struct Pocket {
+    x0: u32,
+    lo: Vec<u32>,
+    hi: Vec<u32>,
+    /// The largest `hi - lo`.
+    deepest: u32,
+    /// Columns by decreasing initial depth, with that depth. Depths only
+    /// shrink, so the columns that started at least as deep as an item's
+    /// tallest column are the only ones its tallest column can go in.
+    by_depth: Vec<(u32, u32)>,
+}
+
+impl Pocket {
+    /// The pocket above a row of `items` at `pos`, pushed against
+    /// `frontline`.
+    fn new(profiles: &[Profile], items: &[usize], pos: &[(u32, u32)], frontline: &[u32]) -> Pocket {
+        let x0 = pos.iter().map(|p| p.0).min().unwrap_or(0);
+        let x1 = items
+            .iter()
+            .zip(pos)
+            .map(|(&i, p)| p.0 + profiles[i].w)
+            .max()
+            .unwrap_or(x0);
+        let lo = frontline[x0 as usize..x1 as usize].to_vec();
+        let mut hi = vec![u32::MAX; lo.len()];
+        for (&i, &(x, y)) in items.iter().zip(pos) {
+            let p = &profiles[i];
+            for c in 0..p.w as usize {
+                if p.top[c] < p.bot[c] {
+                    let h = &mut hi[(x - x0) as usize + c];
+                    *h = (*h).min(y + p.top[c]);
+                }
+            }
+        }
+        for (h, &l) in hi.iter_mut().zip(&lo) {
+            *h = if *h == u32::MAX { l } else { (*h).max(l) };
+        }
+        Pocket::between(x0, lo, hi)
+    }
+
+    fn between(x0: u32, lo: Vec<u32>, hi: Vec<u32>) -> Pocket {
+        let mut by_depth: Vec<(u32, u32)> = lo
+            .iter()
+            .zip(&hi)
+            .enumerate()
+            .map(|(c, (&l, &h))| (h - l, c as u32))
+            .filter(|&(d, _)| d > 0)
+            .collect();
+        by_depth.sort_unstable_by_key(|&(d, c)| (Reverse(d), c));
+        let mut pocket = Pocket {
+            x0,
+            lo,
+            hi,
+            deepest: 0,
+            by_depth,
+        };
+        pocket.measure();
+        pocket
+    }
+
+    fn measure(&mut self) {
+        self.deepest = self
+            .lo
+            .iter()
+            .zip(&self.hi)
+            .map(|(&l, &h)| h - l)
+            .max()
+            .unwrap_or(0);
+    }
+
+    /// The highest (then leftmost) position for `p`, whose tallest column is
+    /// `tall`, with its bounding box above `height`.
+    fn fit(&self, p: &Profile, fit: &FitInfo, height: u32) -> Option<(u32, u32)> {
+        let (tall, key, cols) = (fit.tall, fit.key, &fit.cols[..]);
+        if cols.is_empty() || tall > self.deepest || p.w as usize > self.lo.len() || p.h > height {
+            return None;
+        }
+        let last = self.lo.len() - p.w as usize;
+        let mut best: Option<(u32, u32)> = None;
+        // The tallest column can only go in a column that is still as deep.
+        let deep = self.by_depth.partition_point(|&(d, _)| d >= tall);
+        'columns: for &(_, k) in &self.by_depth[..deep] {
+            let Some(x) = (k as usize).checked_sub(key).filter(|&x| x <= last) else {
+                continue;
+            };
+            let (lo, hi) = (self.lo[k as usize], self.hi[k as usize]);
+            if hi - lo < tall {
+                continue;
+            }
+            // Pushed up against `lo`, the item must stay above `hi` (in the
+            // tallest column, first), the page bottom, and beat `best`.
+            let at = self.x0 + x as u32;
+            let Some(limit) = hi.checked_sub(p.bot[key]) else {
+                continue;
+            };
+            let mut limit = limit.min(height - p.h);
+            if let Some((bx, by)) = best {
+                limit = limit.min(if at < bx { by } else { by.wrapping_sub(1) });
+                if by == 0 && at >= bx {
+                    continue;
+                }
+            }
+            // It fits if the lowest `y` any column needs is at most the
+            // highest any column allows.
+            let mut y = lo.saturating_sub(p.top[key]);
+            for &c in cols {
+                let c = c as usize;
+                y = y.max(self.lo[x + c].saturating_sub(p.top[c]));
+                match self.hi[x + c].checked_sub(p.bot[c]) {
+                    Some(l) if y <= l.min(limit) => limit = limit.min(l),
+                    _ => continue 'columns,
+                }
+            }
+            best = Some((at, y));
+        }
+        best
+    }
+
+    /// Marks the columns above `p` at `(x, y)` as used.
+    fn insert(&mut self, p: &Profile, x: u32, y: u32) {
+        let x = (x - self.x0) as usize;
+        for c in 0..p.w as usize {
+            if p.top[c] < p.bot[c] {
+                let l = &mut self.lo[x + c];
+                *l = (*l).max(y + p.bot[c]).min(self.hi[x + c]);
+            }
+        }
+        self.measure();
+    }
+}
+
 /// Packs profiles (in their own orientation) by folding them into rows on at
 /// most `max_pages` pages of `width × height` (`height` may be `u32::MAX`:
 /// unbounded). `None` if they don't fit.
@@ -499,37 +708,41 @@ pub(crate) fn pack_folded(
     let mut order: Vec<usize> = (0..items.len()).collect();
     order.sort_by_key(|&i| (Reverse(items[i].h), Reverse(items[i].w), i));
     let reference = if height == u32::MAX { width } else { height };
-    let folder = Folder {
+    let mut folder = Folder {
         items,
         order,
         width,
         knee_min: (reference / 10).max(1),
+        fits: items.iter().map(FitInfo::new).collect(),
+        height,
     };
     let new_shelf = || Shelf {
         frontline: vec![0; width as usize],
         knee: None,
         used_width: 0,
+        used_height: 0,
         empty: true,
     };
     let mut placements = vec![Placement::default(); items.len()];
     let mut shelves: Vec<Shelf> = Vec::new();
     let mut start = 0;
-    while start < items.len() {
+    while start < folder.order.len() {
         if shelves.is_empty() {
             shelves.push(new_shelf());
         }
+        let page = shelves.len() as u32 - 1;
+        let last_page = shelves.len() >= max_pages;
         let shelf = shelves.last_mut().expect("pushed above");
         let (row, knee) = folder.next_row(shelf, start);
         if row.height > height {
-            if shelf.empty || shelves.len() >= max_pages {
+            if shelf.empty || last_page {
                 return None;
             }
             shelves.push(new_shelf());
             continue;
         }
-        let page = shelves.len() as u32 - 1;
-        let shelf = shelves.last_mut().expect("pushed above");
-        for (&i, &(x, y)) in folder.order[start..row.end].iter().zip(&row.pos) {
+        let row_items = &folder.order[start..row.end];
+        for (&i, &(x, y)) in row_items.iter().zip(&row.pos) {
             placements[i] = Placement {
                 page,
                 x,
@@ -538,19 +751,29 @@ pub(crate) fn pack_folded(
             };
             shelf.used_width = shelf.used_width.max(x + items[i].w);
         }
-        *shelf = Shelf {
-            frontline: row.frontline,
-            knee,
-            used_width: shelf.used_width,
-            empty: false,
-        };
+        // Fill the pocket the row left above itself with the largest of the
+        // remaining items that fit, which then leave the folding order.
+        let mut pocket = Pocket::new(items, row_items, &row.pos, &shelf.frontline);
+        let rest = folder.fill(
+            shelf,
+            &mut pocket,
+            &folder.order[row.end..],
+            page,
+            &mut placements,
+        );
+        shelf.frontline = row.frontline;
+        shelf.knee = knee;
+        shelf.used_height = shelf.used_height.max(row.height);
+        shelf.empty = false;
+        folder.order.truncate(row.end);
+        folder.order.extend(rest);
         start = row.end;
     }
     Some(Layout {
         placements,
         page_sizes: shelves
             .iter()
-            .map(|s| (s.used_width, s.frontline.iter().copied().max().unwrap_or(0)))
+            .map(|s| (s.used_width, s.used_height))
             .collect(),
     })
 }
@@ -618,6 +841,40 @@ mod tests {
             }
             p = p.rotate90();
         }
+    }
+
+    /// An L: `w × h` with the bottom-right quadrant from row `h0` and column
+    /// `w0` empty.
+    fn l_shape(w: u32, h: u32, w0: u32, h0: u32) -> Profile {
+        let mut p = Profile::rect(w, h);
+        for c in w0..w {
+            p.bot[c as usize] = h0;
+        }
+        for r in h0..h {
+            p.right[r as usize] = w0;
+        }
+        p
+    }
+
+    /// A row pushed against an overhang leaves a pocket under it, which
+    /// takes a small item that would otherwise start a row of its own.
+    #[test]
+    fn small_items_fill_pockets_under_overhangs() {
+        // The L's right half ends at row 4; the full-width rect below it is
+        // held at row 10 by its left half, leaving rows 4..10 free on the
+        // right.
+        let items = vec![
+            l_shape(20, 10, 10, 4),
+            Profile::rect(20, 10),
+            Profile::rect(6, 4),
+        ];
+        let layout = pack_folded(&items, 20, 30, 1).unwrap();
+        let p = &layout.placements;
+        assert_eq!((p[0].x, p[0].y), (0, 0));
+        assert_eq!((p[1].x, p[1].y), (0, 10));
+        assert!(p[2].x >= 10 && p[2].y == 4, "({}, {})", p[2].x, p[2].y);
+        assert_eq!(layout.page_sizes, vec![(20, 20)]);
+        assert_disjoint(&items, &layout, 30);
     }
 
     /// A tall item followed by short ones leaves a knee: the next row is

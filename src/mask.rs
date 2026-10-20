@@ -134,7 +134,7 @@ impl Mask {
 }
 
 /// `0..h` ordered by breadth-first bisection: `0, h-1, h/2, h/4, 3h/4, ...`.
-fn coarse_to_fine(h: u32) -> Vec<u32> {
+pub(crate) fn coarse_to_fine(h: u32) -> Vec<u32> {
     let mut order = Vec::with_capacity(h as usize);
     if h == 0 {
         return order;

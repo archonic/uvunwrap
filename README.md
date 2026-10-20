@@ -98,9 +98,10 @@ maps such as Blender's. See [`python/`](https://github.com/archonic/uvunwrap/tre
    Texel density is automatic (fit one page) or fixed (one growing page, or
    multiple fixed-size pages). `Packing::Fast` instead folds charts into rows
    and pushes each row up against the previous ones by the charts' outlines
-   (after TABI, Gu, Vining & Sheffer 2026): milliseconds for thousands of
-   charts, but it can't use holes or the space under overhangs, so atlases
-   are less dense. `max_chart_size` scales
+   (after TABI, Gu, Vining & Sheffer 2026), then fits smaller charts into the
+   gaps above each row: several times faster (tens of times with thousands
+   of charts), but it can't use holes inside charts, so atlases are less
+   dense. `max_chart_size` scales
    oversized charts down; `block_align` gives every chart its own 4×4 texel
    blocks for block-compressed lightmaps.
 

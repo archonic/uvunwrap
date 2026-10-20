@@ -372,7 +372,7 @@ pub(crate) fn pack(
             p.ctx.advance(Stage::Packing, 1, None)?;
             pack_pages(p, s, size)
         }
-        (None, size) => pack_auto(p, size),
+        (None, size) => pack_auto(p, size, 1.0025),
     }
 }
 
@@ -383,10 +383,10 @@ struct Fit {
     density: f64,
 }
 
-/// The highest density at which everything fits one `size × size` page,
-/// cropped to the rows used. If nothing fits one page, several pages at a
-/// density low enough for every item.
-fn pack_auto(p: &Packer<'_>, size: u32) -> Result<PackResult, Error> {
+/// The highest density at which everything fits one `size × size` page
+/// (within a factor `tolerance`), cropped to the rows used. If nothing fits
+/// one page, several pages at a density low enough for every item.
+fn pack_auto(p: &Packer<'_>, size: u32, tolerance: f64) -> Result<PackResult, Error> {
     // One packing trial at density `s`: the packing if it fits one page,
     // and for fast packing the height it needed. Folding onto an unbounded
     // page places the same rows as onto a bounded one until a row
@@ -404,7 +404,15 @@ fn pack_auto(p: &Packer<'_>, size: u32) -> Result<PackResult, Error> {
                     .place(&shapes, size, u32::MAX, 1)
                     .expect("an unbounded page always fits");
                 let used = layout.page_sizes[0].1;
-                ((used <= size).then_some(layout), Some(used))
+                if used <= size {
+                    (Some(layout), Some(used))
+                } else {
+                    // The last rows may still fit below the frontline; then
+                    // the height says nothing about the next density.
+                    let layout = p.place(&shapes, size, size, 1);
+                    let used = layout.is_none().then_some(used);
+                    (layout, used)
+                }
             }
             Packing::Shape => (p.place(&shapes, size, size, 1), None),
         };
@@ -426,7 +434,7 @@ fn pack_auto(p: &Packer<'_>, size: u32) -> Result<PackResult, Error> {
             method: Packing::Fast,
             ..*p
         };
-        lo = match pack_auto(&fast, size) {
+        lo = match pack_auto(&fast, size, 1.0025) {
             Ok(r) if r.pages == 1 => r.texels_per_unit,
             _ => 0.0,
         };
@@ -448,24 +456,41 @@ fn pack_auto(p: &Packer<'_>, size: u32) -> Result<PackResult, Error> {
             lo = 0.0;
         }
     }
-    // Narrow [lo, hi) until within 0.25%: bisect, or for fast packing jump
+    // Narrow [lo, hi) until within `tolerance`: bisect, or for fast packing jump
     // to the density predicted to just fill the page (used area grows with
     // the density squared) when that is inside the bracket. That halves
     // the trials to reach the page edge; heights step by whole rows near
     // it, so the last few trials are bisection either way.
-    let mut next = 0.0;
+    let (mut next, mut step) = (0.0, None);
+    // A step small enough that failing there ends the search.
+    let small = 1.0 + 0.8 * (tolerance - 1.0);
     for _ in 0..24 {
-        if best.is_some() && hi < lo * 1.0025 {
+        if best.is_some() && hi < lo * tolerance {
             break;
         }
         let mid = if lo > 0.0 { (lo * hi).sqrt() } else { 0.5 * hi };
         let s = if next > lo * 1.001 && next < hi / 1.001 {
             next
+        } else if let Some(k) = step.filter(|&k| lo * k < hi) {
+            lo * k
         } else {
             mid
         };
         p.ctx.advance(Stage::Packing, 1, None)?;
         let (fit, used) = trial(s)?;
+        next = match used {
+            Some(used) if used > 0 => s * (size as f64 / used as f64).sqrt(),
+            _ => 0.0,
+        };
+        // After a fit with no useful prediction, step up a little rather
+        // than bisect towards a far upper bound: by `small` if the fit all
+        // but filled the page, a little further if it only fit by filling
+        // below the frontline.
+        step = match (&fit, used) {
+            (Some(_), Some(_)) if next <= s * 1.001 => Some(small),
+            (Some(_), None) => Some(small.max(1.01)),
+            _ => None,
+        };
         match fit {
             Some(fit) => {
                 lo = s;
@@ -473,10 +498,6 @@ fn pack_auto(p: &Packer<'_>, size: u32) -> Result<PackResult, Error> {
             }
             None => hi = s,
         }
-        next = match used {
-            Some(used) if used > 0 => s * (size as f64 / used as f64).sqrt(),
-            _ => 0.0,
-        };
     }
     if let Some(fit) = best {
         // Crop the page to the rows actually used.

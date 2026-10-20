@@ -113,7 +113,9 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   parallel on one set of masks, smallest area), `pack_pages` (fixed density,
   fixed pages). Fast trials fold onto an unbounded page (same rows until
   one overflows), so each also gives the height needed, and the next trial
-  jumps to `s · sqrt(page / used)` when that's inside the bracket. Per-chart density (`chart_density`) applies
+  jumps to `s · sqrt(page / used)` when that's inside the bracket; one that
+  overflows is retried on the bounded page (tail filling), and a fit with
+  no useful prediction steps up by a small factor instead of bisecting. Per-chart density (`chart_density`) applies
   `max_chart_size`; `block_align` packs in 4×4 block units
   (`Mask::downsample`/`Profile::downsample` after rotating in texels,
   sizes rounded up) and scales placements back.
@@ -130,8 +132,10 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   (max, sum) frontline. Beyond TABI: each placed row's `Pocket` (per column,
   old frontline to the row's item tops) is filled with the largest remaining
   items that fit (`Folder::fill`, `Pocket::fit`: exact, candidates are
-  columns as deep as the item's tallest column). A row that overflows
-  starts a new page.
+  columns as deep as the item's tallest column); when a row overflows a
+  bounded page, the rest are dropped into the pocket below the frontline
+  (`Pocket::below`; on the last page only if their area fits), then a new
+  page starts.
 - `src/tile.rs`: instanced meshes: `layout_tile` packs a tile's charts once
   (`pack_unbounded` at the smallest instance's density, capped so the
   largest instance fits the page); each instance becomes one unrotatable

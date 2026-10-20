@@ -19,7 +19,9 @@
 //! each placed row leaves a [`Pocket`]: per column, the gap between the
 //! frontline it was pushed against and its items' tops. The largest of the
 //! remaining items that fit go into it, each pushed up as far as it goes;
-//! most are small ones from the end of the order.
+//! most are small ones from the end of the order. When the next row doesn't
+//! fit a bounded page, the remaining items are dropped one at a time into
+//! the space below the frontline before starting a new page.
 //!
 //! [`Packing::Fast`]: crate::Packing::Fast
 
@@ -541,6 +543,9 @@ struct FitInfo {
     /// Its covered columns, ends and middle first: they usually decide (or
     /// rule out) a position within the first few.
     cols: Vec<u32>,
+    /// The total height of its columns: items in one pocket never share a
+    /// column's rows.
+    area: u64,
 }
 
 impl FitInfo {
@@ -553,7 +558,18 @@ impl FitInfo {
             .map(|c| (p.bot[c].saturating_sub(p.top[c]), c))
             .max_by_key(|&(t, c)| (t, Reverse(c)))
             .unwrap_or((0, 0));
-        FitInfo { tall, key, cols }
+        let area = p
+            .top
+            .iter()
+            .zip(&p.bot)
+            .map(|(&t, &b)| b.saturating_sub(t) as u64)
+            .sum();
+        FitInfo {
+            tall,
+            key,
+            cols,
+            area,
+        }
     }
 }
 
@@ -564,7 +580,8 @@ impl FitInfo {
 /// where the row has no item): everything placed before lies above `lo` and
 /// the row's items lie below `hi`, so an item within it overlaps nothing,
 /// and later rows, pushed against the frontline below the row, never reach
-/// it.
+/// it. Below the frontline, down to the page bottom, once the next row
+/// doesn't fit.
 struct Pocket {
     x0: u32,
     lo: Vec<u32>,
@@ -603,6 +620,11 @@ impl Pocket {
             *h = if *h == u32::MAX { l } else { (*h).max(l) };
         }
         Pocket::between(x0, lo, hi)
+    }
+
+    /// The pocket below `frontline`, down to `height`.
+    fn below(frontline: &[u32], height: u32) -> Pocket {
+        Pocket::between(0, frontline.to_vec(), vec![height; frontline.len()])
     }
 
     fn between(x0: u32, lo: Vec<u32>, hi: Vec<u32>) -> Pocket {
@@ -735,6 +757,20 @@ pub(crate) fn pack_folded(
         let shelf = shelves.last_mut().expect("pushed above");
         let (row, knee) = folder.next_row(shelf, start);
         if row.height > height {
+            // Before leaving the page, drop what fits into the space below
+            // the frontline, one item at a time. On the last page, only if
+            // there is room for all of it (else the page fails anyway).
+            let rest = &folder.order[start..];
+            let free: u64 = shelf.frontline.iter().map(|&f| (height - f) as u64).sum();
+            if !last_page || rest.iter().map(|&i| folder.fits[i].area).sum::<u64>() <= free {
+                let mut pocket = Pocket::below(&shelf.frontline, height);
+                let rest = folder.fill(shelf, &mut pocket, rest, page, &mut placements);
+                folder.order.truncate(start);
+                folder.order.extend(rest);
+                if start == folder.order.len() {
+                    break;
+                }
+            }
             if shelf.empty || last_page {
                 return None;
             }
@@ -875,6 +911,21 @@ mod tests {
         assert!(p[2].x >= 10 && p[2].y == 4, "({}, {})", p[2].x, p[2].y);
         assert_eq!(layout.page_sizes, vec![(20, 20)]);
         assert_disjoint(&items, &layout, 30);
+    }
+
+    /// Below the frontline, an item drops to the highest place it fits.
+    #[test]
+    fn items_drop_below_the_frontline() {
+        let frontline = [6, 6, 6, 6, 6, 2, 2, 2, 2, 2];
+        let mut pocket = Pocket::below(&frontline, 10);
+        let item = Profile::rect(5, 6);
+        let fit = FitInfo::new(&item);
+        assert_eq!(pocket.fit(&item, &fit, 10), Some((5, 2)));
+        pocket.insert(&item, 5, 2);
+        // Now only the left half is left, 4 rows deep.
+        assert_eq!(pocket.fit(&item, &fit, 10), None);
+        let small = Profile::rect(5, 4);
+        assert_eq!(pocket.fit(&small, &FitInfo::new(&small), 10), Some((0, 6)));
     }
 
     /// A tall item followed by short ones leaves a knee: the next row is

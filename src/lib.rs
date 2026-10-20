@@ -246,7 +246,7 @@ pub enum Packing {
     /// Fold charts into rows sorted by height and push each row up against
     /// the previous ones, compacting by each chart's per-row and per-column
     /// extent (TABI-style), then fit smaller charts into the gaps left above
-    /// each row. Several times faster than
+    /// each row and at the bottom of the page. Several times faster than
     /// [`Packing::Shape`] (tens of times with thousands of charts), but
     /// can't nest charts into holes, so atlases are less dense.
     Fast,

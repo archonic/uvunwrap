@@ -108,7 +108,7 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
 - `src/pack.rs`: `prepare` (sizes and tile layouts), then `rasterize` only
   once sizes pass the page and texel-budget checks (returns `Shapes`: masks
   or profiles), `place` (by `Shapes`), and one function per mode: `pack_auto` (bisection to fit one page;
-  shape is seeded by the fast result with at most 8 back-off steps; cropped to used
+  shape is seeded by a coarse (3%) fast result with at most 8 back-off steps; cropped to used
   height, multi-page fallback), `pack_unbounded` (fixed density, 7 widths in
   parallel on one set of masks, smallest area), `pack_pages` (fixed density,
   fixed pages). Fast trials fold onto an unbounded page (same rows until

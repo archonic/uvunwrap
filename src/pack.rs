@@ -429,12 +429,12 @@ fn pack_auto(p: &Packer<'_>, size: u32, tolerance: f64) -> Result<PackResult, Er
     let (mut lo, mut hi) = (0.0, (full / p.area()).sqrt());
     if p.method == Packing::Shape {
         // A fast packing is a valid shape packing, so its density is a good
-        // lower bound.
+        // lower bound; a rough one does, as the bisection refines it.
         let fast = Packer {
             method: Packing::Fast,
             ..*p
         };
-        lo = match pack_auto(&fast, size, 1.0025) {
+        lo = match pack_auto(&fast, size, 1.03) {
             Ok(r) if r.pages == 1 => r.texels_per_unit,
             _ => 0.0,
         };

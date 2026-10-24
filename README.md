@@ -137,11 +137,11 @@ atlas area.
 
 | Model | Triangles | Charts | Single core | Multi-core | Utilization |
 |---|---|---|---|---|---|
-| Spot | 5.9K | 47 | 42 ms | 23 ms | 71% |
-| Stanford bunny | 69K | 58 | 0.32 s | 0.13 s | 65% |
-| Armadillo | 100K | 257 | 0.59 s | 0.23 s | 60% |
-| Nefertiti | 100K | 456 | 1.10 s | 0.57 s | 64% |
-| Igea | 269K | 83 | 1.45 s | 0.60 s | 66% |
+| Spot | 5.9K | 47 | 53 ms | 26 ms | 73% |
+| Stanford bunny | 69K | 63 | 0.56 s | 0.20 s | 62% |
+| Armadillo | 100K | 248 | 0.88 s | 0.29 s | 60% |
+| Nefertiti | 100K | 459 | 1.81 s | 0.90 s | 64% |
+| Igea | 269K | 84 | 2.40 s | 0.87 s | 63% |
 
 `cargo bench` runs criterion benchmarks on procedural meshes, plus any of
 `spot`, `beetle`, `bunny`, `armadillo`, `nefertiti` and `igea` found in

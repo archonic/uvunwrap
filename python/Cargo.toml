@@ -1,6 +1,6 @@
 [package]
 name = "uvunwrap-python"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Python bindings for uvunwrap, published to PyPI as `uvunwrap`"
@@ -13,5 +13,5 @@ name = "uvunwrap_python"
 crate-type = ["cdylib"]
 
 [dependencies]
-uvunwrap = { path = "..", version = "0.2.0" }
+uvunwrap = { path = "..", version = "0.3.0" }
 pyo3 = { version = "0.30", features = ["abi3-py311"] }

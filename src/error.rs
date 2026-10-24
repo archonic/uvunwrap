@@ -40,7 +40,8 @@ pub enum Error {
     FaceDataLength {
         /// Mesh position in the input slice.
         mesh: usize,
-        /// Which array: `"face_materials"`, `"ignored_faces"` or `"polygons"`.
+        /// Which array: `"face_materials"`, `"ignored_faces"`, `"seams"` or
+        /// `"polygons"`.
         field: &'static str,
         /// Length of the array.
         len: usize,

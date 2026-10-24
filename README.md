@@ -41,6 +41,8 @@ seams) become chart boundaries. Optional per-mesh inputs:
 
 - `face_materials`: charts never span two materials.
 - `ignored_faces`: faces that get no UV space.
+- `seams`: edges that must become chart boundaries (three flags per
+  triangle, like Blender's "Mark Seam"), without splitting vertices.
 - `polygons`: for meshes triangulated from quads and n-gons, the polygon
   each triangle came from. A polygon's triangles always share a chart, so
   every polygon corner gets exactly one UV, as UV maps that store one UV

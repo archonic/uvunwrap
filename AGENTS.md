@@ -26,7 +26,7 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   mirrored: rotations by multiples of 90° only.
 - **Authored structure is respected.** Edges where the input splits
   vertices (hard edges, UV seams) are chart boundaries; `face_materials`
-  and `ignored_faces` are honoured.
+  and `ignored_faces` are honoured, and so are `seams`.
 - **Determinism.** Bit-identical output for any thread count. No platform
   math in `src/`: never call `sin`/`cos`/`atan2`/`acos`/`powf`/`exp`/`ln`
   etc. (use `geom::cos`/`geom::angle`; `sqrt` is fine, it is exactly
@@ -48,8 +48,8 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
 
 - `src/lib.rs`: the public API only: crate docs, `generate`/
   `generate_with_progress`, `MeshInput::new` plus optional
-  `face_materials`/`ignored_faces`/`polygons`/`scale`/`instance_scales`/
-  `existing_uvs`,
+  `face_materials`/`ignored_faces`/`seams`/`polygons`/`scale`/
+  `instance_scales`/`existing_uvs`,
   `Options` with `Density::{Auto, Fixed}` and `Packing::{Shape, Fast}`,
   `Atlas`, `OutputMesh`, `OutputVertex` (`page: Option`), `InstanceRect`.
 - `src/error.rs`: `Error` (re-exported), naming the offending
@@ -71,7 +71,8 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   manifold + consistently oriented adjacency within one material only. Edges
   where the input splits vertices (authored seams) are cut too, unless more
   than half of all adjacent edges are split (flat shading); with input UVs,
-  edges where the UVs differ are cut instead (always). Polygon links
+  edges where the UVs differ are cut instead (always). `MeshInput::seams`
+  edges are always cut, except between two faces of one polygon. Polygon links
   (`polygon`: each face's lowest-numbered face of its polygon, `siblings`:
   the others) from `MeshInput::polygons`; every face is its own polygon
   without them.
@@ -156,7 +157,7 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   sweep-and-prune, so large meshes are fine). Topic files: `unwrap`,
   `inputs`, `polygons`, `packing`, `instances`, `progress`, `robustness`
   (hostile inputs and a seeded random mesh/options property test, half
-  the seeds with bent quads as polygons).
+  the seeds with bent quads as polygons, a third with random seams).
 - `python/`: Python bindings (workspace crate `uvunwrap-python`, not on
   crates.io; PyPI package and module `uvunwrap`, built with maturin, abi3
   wheels for Python ≥ 3.11). `src/lib.rs`: `Mesh` (inputs from any

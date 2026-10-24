@@ -17,8 +17,10 @@ class Mesh:
     `positions` holds x, y, z per vertex and `indices` three vertex indices
     per triangle, as buffers (array.array, numpy, memoryview) or flat or
     nested sequences. `polygons`, `face_materials` and `ignored_faces` have
-    one entry per triangle, `instance_scales` one per instance and
-    `existing_uvs` u, v per vertex."""
+    one entry per triangle, `seams` three per triangle (flag k marks the
+    edge from corner k to corner k + 1 as a required seam),
+    `instance_scales` one per instance and `existing_uvs` u, v per
+    vertex."""
 
     def __init__(
         self,
@@ -28,6 +30,7 @@ class Mesh:
         polygons: Any = None,
         face_materials: Any = None,
         ignored_faces: Any = None,
+        seams: Any = None,
         scale: float = 1.0,
         instance_scales: Any = None,
         existing_uvs: Any = None,

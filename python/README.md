@@ -64,7 +64,8 @@ Keyword arguments of `generate` and `start`:
 | `block_align` | `False` | Give every chart whole 4×4 texel blocks (for BC/ASTC compression). |
 
 `Mesh` also takes `polygons` (the polygon each triangle came from, so
-polygons stay whole), `face_materials`, `ignored_faces`, `scale`,
+polygons stay whole), `seams` (three flags per triangle, one per edge, for
+edges that must become seams), `face_materials`, `ignored_faces`, `scale`,
 `instance_scales` and `existing_uvs`; see the
 [crate documentation](https://docs.rs/uvunwrap) for their details.
 

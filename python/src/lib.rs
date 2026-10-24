@@ -94,21 +94,25 @@ fn floats(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<f32>> {
     Ok(nested.into_iter().flatten().collect())
 }
 
-/// Booleans from an integer buffer or a sequence (numpy bool arrays work as
-/// sequences).
+/// Booleans from an integer buffer or a flat or nested sequence (numpy bool
+/// arrays work as sequences).
 fn bools(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<bool>> {
     if let Some(v) = buffer_as::<u8, bool>(obj, |x| Ok(x != 0))
         .or_else(|| buffer_as::<i32, bool>(obj, |x| Ok(x != 0)))
     {
         return v;
     }
-    obj.extract().map_err(|_| {
+    if let Ok(flat) = obj.extract::<Vec<bool>>() {
+        return Ok(flat);
+    }
+    let nested: Vec<Vec<bool>> = obj.extract().map_err(|_| {
         PyValueError::new_err(format!("{name}: expected a buffer or a sequence of bools"))
-    })
+    })?;
+    Ok(nested.into_iter().flatten().collect())
 }
 
 /// `values` in groups of `N`, or an error naming the array.
-fn groups<const N: usize>(values: Vec<f32>, name: &str) -> PyResult<Vec<[f32; N]>> {
+fn groups<const N: usize, T: Copy>(values: Vec<T>, name: &str) -> PyResult<Vec<[T; N]>> {
     if values.len() % N != 0 {
         return Err(PyValueError::new_err(format!(
             "{name}: {} values is not a multiple of {N}",
@@ -127,6 +131,7 @@ struct MeshData {
     indices: Vec<u32>,
     face_materials: Option<Vec<u32>>,
     ignored_faces: Option<Vec<bool>>,
+    seams: Option<Vec<[bool; 3]>>,
     polygons: Option<Vec<u32>>,
     scale: f32,
     instance_scales: Vec<f32>,
@@ -138,6 +143,7 @@ impl MeshData {
         uvunwrap::MeshInput {
             face_materials: self.face_materials.as_deref(),
             ignored_faces: self.ignored_faces.as_deref(),
+            seams: self.seams.as_deref(),
             polygons: self.polygons.as_deref(),
             scale: self.scale,
             instance_scales: &self.instance_scales,
@@ -150,8 +156,9 @@ impl MeshData {
 /// A triangle mesh to unwrap. `positions` holds x, y, z per vertex and
 /// `indices` three vertex indices per triangle, flat or nested. The optional
 /// arrays have one entry per triangle (`face_materials`, `ignored_faces`,
-/// `polygons`), per instance (`instance_scales`) or per vertex
-/// (`existing_uvs`, u and v); see the crate's `MeshInput` for their meaning.
+/// `polygons`; three per triangle for `seams`), per instance
+/// (`instance_scales`) or per vertex (`existing_uvs`, u and v); see the
+/// crate's `MeshInput` for their meaning.
 #[pyclass(frozen, module = "uvunwrap")]
 struct Mesh(Arc<MeshData>);
 
@@ -160,7 +167,7 @@ impl Mesh {
     #[new]
     #[pyo3(signature = (
         positions, indices, *, polygons=None, face_materials=None, ignored_faces=None,
-        scale=1.0, instance_scales=None, existing_uvs=None,
+        seams=None, scale=1.0, instance_scales=None, existing_uvs=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -169,6 +176,7 @@ impl Mesh {
         polygons: Option<&Bound<'_, PyAny>>,
         face_materials: Option<&Bound<'_, PyAny>>,
         ignored_faces: Option<&Bound<'_, PyAny>>,
+        seams: Option<&Bound<'_, PyAny>>,
         scale: f32,
         instance_scales: Option<&Bound<'_, PyAny>>,
         existing_uvs: Option<&Bound<'_, PyAny>>,
@@ -181,6 +189,9 @@ impl Mesh {
                 .transpose()?,
             ignored_faces: ignored_faces
                 .map(|m| bools(m, "ignored_faces"))
+                .transpose()?,
+            seams: seams
+                .map(|s| groups(bools(s, "seams")?, "seams"))
                 .transpose()?,
             polygons: polygons.map(|m| numbers(m, "polygons")).transpose()?,
             scale,

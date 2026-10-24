@@ -1,5 +1,5 @@
-//! Per-mesh inputs: authored seams, materials, ignored faces, scale and
-//! existing UVs.
+//! Per-mesh inputs: authored and explicit seams, materials, ignored faces,
+//! scale and existing UVs.
 
 mod common;
 use common::*;
@@ -24,6 +24,51 @@ fn authored_seams_become_chart_boundaries() {
     let atlas = run(&[&m], &Options::default());
     assert_eq!(atlas.chart_count, 2);
     assert_split_by(&atlas.meshes[0], &right_of(&m, 1.0));
+}
+
+#[test]
+fn explicit_seams_become_chart_boundaries() {
+    // The welded plane's edges along x = 1, marked on the left side only.
+    let m = plane(12);
+    let right = right_of(&m, 1.0);
+    let seams: Vec<[bool; 3]> = (0..m.faces())
+        .map(|f| {
+            [0, 1, 2].map(|k| {
+                let x = |c: usize| m.positions[m.indices[f * 3 + c % 3] as usize][0];
+                !right[f] && x(k) == 1.0 && x(k + 1) == 1.0
+            })
+        })
+        .collect();
+    let input = MeshInput {
+        seams: Some(&seams),
+        ..m.input()
+    };
+    let atlas = run_inputs(&[input], &Options::default());
+    assert_eq!(atlas.chart_count, 2);
+    assert_split_by(&atlas.meshes[0], &right);
+}
+
+#[test]
+fn explicit_seams_always_cut_except_inside_polygons() {
+    // Every edge marked: unlike split vertices, that isn't read as flat
+    // shading, so each triangle becomes its own chart...
+    let m = plane(4);
+    let all = vec![[true; 3]; m.faces()];
+    let input = MeshInput {
+        seams: Some(&all),
+        ..m.input()
+    };
+    let atlas = run_inputs(&[input], &Options::default());
+    assert_eq!(atlas.chart_count as usize, m.faces());
+    // ...but a quad's two triangles stay together.
+    let polygons = quads(&m);
+    let input = MeshInput {
+        seams: Some(&all),
+        polygons: Some(&polygons),
+        ..m.input()
+    };
+    let atlas = run_inputs(&[input], &Options::default());
+    assert_eq!(atlas.chart_count as usize, m.faces() / 2);
 }
 
 #[test]
@@ -192,6 +237,19 @@ fn input_errors() {
             field: "ignored_faces",
             len: 1,
             face_count: 2,
+            ..
+        })
+    ));
+    let seams = [[false; 3]; 3];
+    let bad_len = MeshInput {
+        seams: Some(&seams),
+        ..m.input()
+    };
+    assert!(matches!(
+        generate(&[bad_len], &o),
+        Err(Error::FaceDataLength {
+            field: "seams",
+            len: 3,
             ..
         })
     ));

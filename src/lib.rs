@@ -104,6 +104,14 @@ pub struct MeshInput<'a> {
     /// Optional per-face flags (one per triangle). Flagged faces get no chart:
     /// their corners collapse onto an existing UV, as for degenerate faces.
     pub ignored_faces: Option<&'a [bool]>,
+    /// Optional seam flags (one triple per triangle): `seams[f][k]` marks the
+    /// edge from corner `k` to corner `k + 1` (mod 3) of triangle `f` as a
+    /// required chart boundary, like Blender's "Mark Seam". Marking either
+    /// side of an edge is enough. Unlike seams implied by split vertices,
+    /// these always cut. A seam between two triangles of one
+    /// [`polygon`](Self::polygons) is ignored, since a polygon always keeps
+    /// one chart. Default `None`.
+    pub seams: Option<&'a [[bool; 3]]>,
     /// Optional polygon ids (one per triangle), for meshes triangulated from
     /// quads and n-gons, such as Blender's `loop_triangles` with their
     /// `polygon_index`. Triangles with the same id always share a chart, so
@@ -152,6 +160,7 @@ impl<'a> MeshInput<'a> {
             indices,
             face_materials: None,
             ignored_faces: None,
+            seams: None,
             polygons: None,
             scale: 1.0,
             instance_scales: &[],

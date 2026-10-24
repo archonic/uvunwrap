@@ -208,6 +208,19 @@ fn random_meshes_and_options() {
             .iter()
             .map(|(m, is_quads)| (*is_quads && seed % 2 == 0).then(|| quads(m)))
             .collect();
+        // Every third seed marks random seams, from a separate generator for
+        // the same reason.
+        let mut seam_rng = Rng::new(seed + 1000);
+        let seams: Vec<Option<Vec<[bool; 3]>>> = meshes
+            .iter()
+            .map(|(m, _)| {
+                (seed % 3 == 0).then(|| {
+                    (0..m.faces())
+                        .map(|_| [0; 3].map(|_| seam_rng.below(8) == 0))
+                        .collect()
+                })
+            })
+            .collect();
         let scales: Vec<Vec<f32>> = meshes
             .iter()
             .map(|_| {
@@ -222,9 +235,11 @@ fn random_meshes_and_options() {
             .iter()
             .zip(&scales)
             .zip(&polygons)
-            .map(|(((m, _), k), p)| MeshInput {
+            .zip(&seams)
+            .map(|((((m, _), k), p), e)| MeshInput {
                 instance_scales: k,
                 polygons: p.as_deref(),
+                seams: e.as_deref(),
                 ..m.input()
             })
             .collect();

@@ -31,7 +31,8 @@ pub(crate) struct Topology {
     /// of the same material produce adjacency; everything else is treated as
     /// a boundary (a seam). So are edges where the input mesh is split (hard
     /// edges, UV seams), unless most edges are split (e.g. flat shading), or,
-    /// when the mesh has input UVs, edges where those UVs differ.
+    /// when the mesh has input UVs, edges where those UVs differ, and edges
+    /// marked in [`MeshInput::seams`] (except inside a polygon).
     pub neighbors: Vec<[u32; 3]>,
 }
 
@@ -171,6 +172,23 @@ impl Topology {
         }
 
         let (polygon, polygon_next) = polygon_links(mesh.polygons, nf);
+        if let Some(seams) = mesh.seams {
+            for f in 0..nf {
+                for e in 0..3 {
+                    let g = neighbors[f][e];
+                    if !seams[f][e] || g == NONE || polygon[g as usize] == polygon[f] {
+                        continue;
+                    }
+                    neighbors[f][e] = NONE;
+                    // The same edge on `g`, traversed the other way.
+                    let (a, b) = (faces[f][e], faces[f][(e + 1) % 3]);
+                    let h = faces[g as usize];
+                    if let Some(k) = (0..3).find(|&k| h[k] == b && h[(k + 1) % 3] == a) {
+                        neighbors[g as usize][k] = NONE;
+                    }
+                }
+            }
+        }
         Topology {
             welded,
             positions: wpos,

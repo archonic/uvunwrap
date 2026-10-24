@@ -67,6 +67,7 @@ pub(crate) fn mesh(mi: usize, m: &MeshInput<'_>) -> Result<(), Error> {
     let per_face = [
         ("face_materials", m.face_materials.map(<[_]>::len)),
         ("ignored_faces", m.ignored_faces.map(<[_]>::len)),
+        ("seams", m.seams.map(<[_]>::len)),
         ("polygons", m.polygons.map(<[_]>::len)),
     ];
     for (field, len) in per_face {

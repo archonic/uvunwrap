@@ -120,6 +120,18 @@ def test_instances():
     assert all(0 <= r.min[k] < r.max[k] <= 1 for r in rects for k in (0, 1))
 
 
+def test_seams_cut_charts():
+    # The quad's diagonal is edge 2 of triangle 0 (corner 2 -> 0).
+    positions, indices = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], [0, 1, 2, 0, 2, 3]
+    assert uvunwrap.generate([uvunwrap.Mesh(positions, indices)]).chart_count == 1
+    for seams in ([[False, False, True], [False] * 3], [False, False, True] + [False] * 3,
+                  array.array("B", [0, 0, 1, 0, 0, 0])):
+        mesh = uvunwrap.Mesh(positions, indices, seams=seams)
+        assert uvunwrap.generate([mesh]).chart_count == 2
+    with pytest.raises(ValueError, match="multiple of 3"):
+        uvunwrap.Mesh(positions, indices, seams=[True])
+
+
 def test_errors():
     with pytest.raises(uvunwrap.UnwrapError, match="index 9 out of range"):
         uvunwrap.generate([uvunwrap.Mesh([[0, 0, 0]] * 3, [0, 1, 9])])

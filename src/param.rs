@@ -1,8 +1,9 @@
 //! Chart parameterization.
 //!
 //! Each chart is flattened with planar projection (if it is already flat), else
-//! Least Squares Conformal Maps (Lévy et al. 2002), falling back to planar
-//! projection. A result is only accepted if it has no flipped triangles, no
+//! Least Squares Conformal Maps (Lévy et al. 2002) refined by as-rigid-as-possible
+//! iterations (Liu et al. 2008), falling back to the plain LSCM result and then
+//! planar projection. A result is only accepted if it has no flipped triangles, no
 //! self-overlap and bounded area distortion; otherwise the chart is split in
 //! two and both halves are retried (large, strongly curved charts are split
 //! without trying). Single triangles always succeed, so this
@@ -14,7 +15,7 @@ use crate::geom::{
 };
 use crate::par;
 use crate::progress::{Ctx, Stage};
-use crate::solver::{least_squares, SparseRows};
+use crate::solver::{least_squares, Factored, SparseRows};
 use crate::topology::{Topology, NONE};
 use std::collections::{HashMap, VecDeque};
 
@@ -164,7 +165,11 @@ fn parameterize_group(job: &Job, faces: Vec<u32>) -> Vec<Chart> {
             return Vec::new(); // the solve can't be interrupted, but validation can be skipped
         }
         match validate(topo, &faces, &local, &conformal, max_distortion) {
-            Ok(()) => return job.done(faces, verts, local, conformal),
+            Ok(()) => {
+                let accept = |uv: &[V2]| validate(topo, &faces, &local, uv, max_distortion).is_ok();
+                let uvs = arap(topo, &verts, &local, &conformal, accept).unwrap_or(conformal);
+                return job.done(faces, verts, local, uvs);
+            }
             Err(Rejection::Overlap(a, b)) => overlap = Some((a, b)),
             Err(Rejection::Invalid) => {}
         }
@@ -363,6 +368,130 @@ fn lscm(topo: &Topology, verts: &[u32], local: &[[u32; 3]], init: &[V2]) -> Vec<
             }
         })
         .collect()
+}
+
+/// Local/global iterations of [`arap`].
+const ARAP_ITERATIONS: usize = 10;
+/// CGLS iterations per [`arap`] global step without the direct solver. Each
+/// step is warm-started from the last and only has to lower the energy, not
+/// converge: 100 gives the same results as solving to tolerance on the test
+/// models, and 30 is measurably worse.
+const ARAP_CGLS_ITERATIONS: usize = 100;
+
+/// As-rigid-as-possible refinement (Liu et al. 2008) of a parameterization:
+/// alternately fits each triangle's closest rotation to its current Jacobian
+/// (local step) and solves for the UVs whose Jacobians best match those
+/// rotations, area-weighted (global step: one factorization, shared by u and
+/// v). LSCM preserves angles but lets scale drift across a curved chart; this
+/// evens out the area distortion at a small cost in angle distortion.
+/// Iterates can flip or overlap, so the result is the latest flip-free
+/// iterate that `accept`s, trying only the latest and the first (validation
+/// is the expensive part); `None` if neither is accepted.
+fn arap(
+    topo: &Topology,
+    verts: &[u32],
+    local: &[[u32; 3]],
+    init: &[V2],
+    accept: impl Fn(&[V2]) -> bool,
+) -> Option<Vec<V2>> {
+    let n = verts.len();
+    if n < 3 {
+        return None;
+    }
+    // Per triangle, the rows of its gradient operator in its own frame
+    // (p0 = 0, p1 = (x1, 0), p2 = (x2, y2)), scaled by sqrt(area), and that
+    // weight. The energy is Σ area · |J - R|², always positive semidefinite
+    // (cotangent weights aren't, on obtuse triangles).
+    let grads: Vec<([f64; 3], [f64; 3], f64)> = local
+        .iter()
+        .map(|t| {
+            let [p0, p1, p2] = t.map(|l| topo.positions[verts[l as usize] as usize]);
+            let e1 = sub3(p1, p0);
+            let e2 = sub3(p2, p0);
+            let two_area = len3(cross3(e1, e2));
+            let x1 = len3(e1);
+            if !(two_area > 0.0) || !(x1 > 0.0) {
+                return ([0.0; 3], [0.0; 3], 0.0);
+            }
+            let x2 = dot3(e2, scale3(e1, 1.0 / x1));
+            let y2 = two_area / x1;
+            let w = (two_area / 2.0).sqrt();
+            let gx = [-1.0 / x1, 1.0 / x1, 0.0];
+            let gy = [(x2 - x1) / (x1 * y2), -x2 / (x1 * y2), 1.0 / y2];
+            (gx.map(|g| g * w), gy.map(|g| g * w), w)
+        })
+        .collect();
+    // Start from `init` at the 3D scale.
+    let area_3d: f64 = grads.iter().map(|g| g.2 * g.2).sum();
+    let area_uv = total_area(local, init);
+    if !(area_uv > 0.0) {
+        return None;
+    }
+    let k = (area_3d / area_uv).sqrt();
+    let mut uv: Vec<V2> = init.iter().map(|p| [p[0] * k, p[1] * k]).collect();
+
+    // Local vertex 0 is pinned (translation); the others are columns i - 1.
+    let mut a = SparseRows::new(n - 1);
+    for (t, g) in local.iter().zip(&grads) {
+        for row in [&g.0, &g.1] {
+            for (c, &coef) in row.iter().enumerate() {
+                if t[c] != 0 && coef != 0.0 {
+                    a.push(t[c] as usize - 1, coef);
+                }
+            }
+            a.end_row();
+        }
+    }
+    let solver = Factored::new(a, ARAP_CGLS_ITERATIONS);
+    let (mut bu, mut bv) = (vec![0.0; local.len() * 2], vec![0.0; local.len() * 2]);
+    let (mut xu, mut xv) = (vec![0.0; n - 1], vec![0.0; n - 1]);
+    // Flip-free iterates: the first, and the latest.
+    let (mut first, mut latest) = (None, None);
+    for _ in 0..ARAP_ITERATIONS {
+        for (f, (t, g)) in local.iter().zip(&grads).enumerate() {
+            let q = t.map(|l| uv[l as usize]);
+            let d =
+                |row: &[f64; 3], c: usize| row[0] * q[0][c] + row[1] * q[1][c] + row[2] * q[2][c];
+            // sqrt(area) · Jacobian [[du/dx, du/dy], [dv/dx, dv/dy]].
+            let (ux, uy, vx, vy) = (d(&g.0, 0), d(&g.1, 0), d(&g.0, 1), d(&g.1, 1));
+            // Its closest rotation [[c, -s], [s, c]].
+            let (c, s) = (ux + vy, vx - uy);
+            let r = (c * c + s * s).sqrt();
+            let (c, s) = if r > 0.0 { (c / r, s / r) } else { (1.0, 0.0) };
+            // The pinned vertex's part moves to the right-hand side.
+            let pinned = |row: &[f64; 3], comp: usize| {
+                (0..3)
+                    .filter(|&k| t[k] == 0)
+                    .map(|k| row[k] * uv[0][comp])
+                    .sum::<f64>()
+            };
+            let w = g.2;
+            bu[2 * f] = w * c - pinned(&g.0, 0);
+            bu[2 * f + 1] = -w * s - pinned(&g.1, 0);
+            bv[2 * f] = w * s - pinned(&g.0, 1);
+            bv[2 * f + 1] = w * c - pinned(&g.1, 1);
+        }
+        for i in 1..n {
+            (xu[i - 1], xv[i - 1]) = (uv[i][0], uv[i][1]);
+        }
+        solver.solve(&bu, &mut xu);
+        solver.solve(&bv, &mut xv);
+        for i in 1..n {
+            uv[i] = [xu[i - 1], xv[i - 1]];
+        }
+        let flipped = local.iter().zip(&grads).any(|(t, g)| {
+            g.2 > 0.0
+                && !(signed_area(uv[t[0] as usize], uv[t[1] as usize], uv[t[2] as usize]) > 0.0)
+        });
+        if !flipped {
+            if first.is_none() {
+                first = Some(uv.clone());
+            } else {
+                latest = Some(uv.clone());
+            }
+        }
+    }
+    [latest, first].into_iter().flatten().find(|uv| accept(uv))
 }
 
 /// Accepts a parameterization only if no triangle is flipped or degenerate, the

@@ -16,8 +16,8 @@ categories = ["graphics", "rendering", "game-development"]
 default = ["parallel", "direct-solver"]
 ## Parameterize charts in parallel with rayon. Disable for wasm32 without threads.
 parallel = ["dep:rayon"]
-## Solve LSCM with a sparse Cholesky factorization (pure-Rust `faer`). Much
-## faster on large charts; without it an iterative CGLS solver is used.
+## Solve LSCM and ARAP with a sparse Cholesky factorization (pure-Rust `faer`).
+## Much faster on large charts; without it an iterative CGLS solver is used.
 direct-solver = ["dep:faer"]
 
 [dependencies]

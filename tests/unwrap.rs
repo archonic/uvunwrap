@@ -194,40 +194,7 @@ fn area_distortion_stays_within_the_limit() {
                 ..Options::default()
             };
             let atlas = run(&[&m], &opts);
-            let out = &atlas.meshes[0];
-            let area3 = |f: usize| {
-                let p =
-                    [0, 1, 2].map(|c| m.positions[m.indices[f * 3 + c] as usize].map(f64::from));
-                let (u, v) = (
-                    [0, 1, 2].map(|k| p[1][k] - p[0][k]),
-                    [0, 1, 2].map(|k| p[2][k] - p[0][k]),
-                );
-                let c = [
-                    u[1] * v[2] - u[2] * v[1],
-                    u[2] * v[0] - u[0] * v[2],
-                    u[0] * v[1] - u[1] * v[0],
-                ];
-                0.5 * (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt()
-            };
-            let mut totals: std::collections::HashMap<u32, (f64, f64)> =
-                std::collections::HashMap::new();
-            for f in 0..m.faces() {
-                if let Some(c) = face_chart(out, f) {
-                    let t = totals.entry(c).or_default();
-                    t.0 += uv_area(out, f);
-                    t.1 += area3(f);
-                }
-            }
-            for f in 0..m.faces() {
-                let Some(c) = face_chart(out, f) else {
-                    continue;
-                };
-                let (uv_total, total) = totals[&c];
-                let (a, b) = (uv_area(out, f), area3(f));
-                if b < total * 1e-6 || a < uv_total * 1e-6 {
-                    continue; // degenerate, or too small for f32 UVs to measure
-                }
-                let ratio = (a / uv_total) / (b / total);
+            for (f, ratio, _) in area_ratios(&m, &atlas.meshes[0]) {
                 let limit = d as f64 * 1.01; // f32 UV rounding
                 assert!(
                     ratio <= limit && ratio * limit >= 1.0,
@@ -235,5 +202,22 @@ fn area_distortion_stays_within_the_limit() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn curved_charts_keep_texel_density_even() {
+    // Area-weighted mean of max(r, 1/r), r as in `area_ratios`. LSCM alone
+    // leaves 1.20 on both (its scale drifts across curved charts); ARAP brings
+    // them to ~1.05 and ~1.08.
+    for m in [torus(48, 24), sphere(32, 16)] {
+        let atlas = run(&[&m], &Options::default());
+        let (mut sum, mut weight) = (0.0, 0.0);
+        for (_, r, a) in area_ratios(&m, &atlas.meshes[0]) {
+            sum += a * r.max(1.0 / r);
+            weight += a;
+        }
+        let mean = sum / weight;
+        assert!(mean < 1.1, "mean area distortion {mean}");
     }
 }

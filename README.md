@@ -88,7 +88,9 @@ maps such as Blender's. See [`python/`](https://github.com/archonic/uvunwrap/tre
    enclosed by a neighbor are merged, and single-triangle teeth are smoothed
    off the boundaries.
 3. **Parameterization**: planar projection for flat charts, otherwise Least
-   Squares Conformal Maps solved by sparse Cholesky. Results with flipped
+   Squares Conformal Maps solved by sparse Cholesky, then as-rigid-as-possible
+   iterations that even out area distortion across the chart (texel density
+   stays uniform on curved charts; kept only when valid). Results with flipped
    triangles, overlaps or area distortion above `max_area_distortion` are split
    and retried, so output is always valid. Large, strongly curved charts are
    split without attempting a solve.

@@ -1,4 +1,4 @@
-//! Sparse least squares for LSCM. With the `direct-solver` feature: a sparse
+//! Sparse least squares for LSCM and ARAP. With the `direct-solver` feature: a sparse
 //! Cholesky factorization (faer) of the normal equations `AᵀA x = Aᵀb`,
 //! assembled directly in compressed-column form. Otherwise, or if the
 //! factorization fails: CGLS, conjugate gradient on the normal equations
@@ -65,69 +65,142 @@ impl SparseRows {
 /// `a`'s columns in place (Jacobi preconditioning), so `a` must not be reused.
 pub(crate) fn least_squares(a: &mut SparseRows, b: &[f64], x: &mut [f64]) {
     #[cfg(feature = "direct-solver")]
-    if cholesky(a, b, x) {
+    if Llt::new(a).is_some_and(|llt| llt.solve(a, b, x)) {
         return;
     }
     let max_iter = (a.ncols * 2 + 100).min(5000);
     cgls(a, b, x, max_iter, 1e-9);
 }
 
-/// Solves `AᵀA x = Aᵀb` by sparse Cholesky. Returns `false` if `AᵀA` isn't
-/// numerically positive definite.
-#[cfg(feature = "direct-solver")]
-fn cholesky(a: &SparseRows, b: &[f64], x: &mut [f64]) -> bool {
-    use faer::dyn_stack::{MemBuffer, MemStack};
-    use faer::sparse::linalg::cholesky::{
-        factorize_symbolic_cholesky, CholeskySymbolicParams, SymmetricOrdering,
-    };
-    use faer::sparse::linalg::SupernodalThreshold;
-    use faer::sparse::{SparseColMat, SymbolicSparseColMat};
-    use faer::{Conj, MatMut, Par, Side};
+/// A least squares system `A x ≈ b` prepared once for many right-hand sides
+/// (ARAP's global steps): the Cholesky factorization of `AᵀA` with the
+/// `direct-solver` feature, else the Jacobi-scaled matrix for CGLS.
+pub(crate) struct Factored {
+    a: SparseRows,
+    #[cfg(feature = "direct-solver")]
+    llt: Option<Llt>,
+    /// Column norms the CGLS matrix is scaled by (empty with `llt`).
+    norm: Vec<f64>,
+    /// CGLS iterations per solve.
+    max_iter: usize,
+}
 
-    let (lower, mut atb) = normal_equations(a, b);
-    let n = a.ncols;
-    let symbolic =
-        SymbolicSparseColMat::<usize>::new_checked(n, n, lower.col_ptr, None, lower.row_idx);
-    let m = SparseColMat::<usize, f64>::new(symbolic, lower.vals);
-    // Supernodal is faster than simplicial on LSCM systems of every size we
-    // see, including small ones, so don't let faer choose.
-    let params = CholeskySymbolicParams {
-        supernodal_flop_ratio_threshold: SupernodalThreshold::FORCE_SUPERNODAL,
-        ..Default::default()
-    };
-    let Ok(sym) =
-        factorize_symbolic_cholesky(m.symbolic(), Side::Lower, SymmetricOrdering::Amd, params)
-    else {
-        return false;
-    };
-    let par = Par::Seq;
-    let mut values = vec![0.0; sym.len_val()];
-    let scratch = sym
-        .factorize_numeric_llt_scratch::<f64>(par, Default::default())
-        .or(sym.solve_in_place_scratch::<f64>(1, par));
-    let mut buf = MemBuffer::new(scratch);
-    let Ok(llt) = sym.factorize_numeric_llt(
-        &mut values,
-        m.as_ref(),
-        Side::Lower,
-        Default::default(),
-        par,
-        MemStack::new(&mut buf),
-        Default::default(),
-    ) else {
-        return false;
-    };
-    llt.solve_in_place_with_conj(
-        Conj::No,
-        MatMut::from_column_major_slice_mut(&mut atb, n, 1),
-        par,
-        MemStack::new(&mut buf),
-    );
-    if atb.iter().any(|v| !v.is_finite()) {
-        return false;
+impl Factored {
+    /// Prepares `a`. Without a factorization, each solve runs at most
+    /// `max_iter` CGLS iterations, warm-started from `x`.
+    pub fn new(mut a: SparseRows, max_iter: usize) -> Self {
+        #[cfg(feature = "direct-solver")]
+        if let Some(llt) = Llt::new(&a) {
+            return Factored {
+                a,
+                llt: Some(llt),
+                norm: Vec::new(),
+                max_iter,
+            };
+        }
+        let mut norm = vec![0.0; a.ncols];
+        for (&c, &v) in a.cols.iter().zip(&a.vals) {
+            norm[c as usize] += v * v;
+        }
+        norm.iter_mut()
+            .for_each(|n| *n = if *n > 0.0 { n.sqrt() } else { 1.0 });
+        for (&c, v) in a.cols.iter().zip(a.vals.iter_mut()) {
+            *v /= norm[c as usize];
+        }
+        Factored {
+            a,
+            #[cfg(feature = "direct-solver")]
+            llt: None,
+            norm,
+            max_iter,
+        }
     }
-    x.copy_from_slice(&atb);
-    true
+
+    /// Solves for `x`, which is also the CGLS starting point. A failed direct
+    /// solve leaves non-finite values in `x`.
+    pub fn solve(&self, b: &[f64], x: &mut [f64]) {
+        #[cfg(feature = "direct-solver")]
+        if let Some(llt) = &self.llt {
+            llt.solve(&self.a, b, x);
+            return;
+        }
+        x.iter_mut().zip(&self.norm).for_each(|(xi, n)| *xi *= n);
+        cgls_raw(&self.a, b, x, self.max_iter, 1e-9);
+        x.iter_mut().zip(&self.norm).for_each(|(xi, n)| *xi /= n);
+    }
+}
+
+/// Sparse Cholesky factor of `AᵀA`.
+#[cfg(feature = "direct-solver")]
+struct Llt {
+    symbolic: faer::sparse::linalg::cholesky::SymbolicCholesky<usize>,
+    values: Vec<f64>,
+}
+
+#[cfg(feature = "direct-solver")]
+impl Llt {
+    /// Factorizes `AᵀA`; `None` if it isn't numerically positive definite.
+    fn new(a: &SparseRows) -> Option<Self> {
+        use faer::dyn_stack::{MemBuffer, MemStack};
+        use faer::sparse::linalg::cholesky::{
+            factorize_symbolic_cholesky, CholeskySymbolicParams, SymmetricOrdering,
+        };
+        use faer::sparse::linalg::SupernodalThreshold;
+        use faer::sparse::{SparseColMat, SymbolicSparseColMat};
+        use faer::{Par, Side};
+
+        let lower = normal_equations(a);
+        let n = a.ncols;
+        let symbolic =
+            SymbolicSparseColMat::<usize>::new_checked(n, n, lower.col_ptr, None, lower.row_idx);
+        let m = SparseColMat::<usize, f64>::new(symbolic, lower.vals);
+        // Supernodal is faster than simplicial on LSCM systems of every size we
+        // see, including small ones, so don't let faer choose.
+        let params = CholeskySymbolicParams {
+            supernodal_flop_ratio_threshold: SupernodalThreshold::FORCE_SUPERNODAL,
+            ..Default::default()
+        };
+        let symbolic =
+            factorize_symbolic_cholesky(m.symbolic(), Side::Lower, SymmetricOrdering::Amd, params)
+                .ok()?;
+        let par = Par::Seq;
+        let mut values = vec![0.0; symbolic.len_val()];
+        let mut buf =
+            MemBuffer::new(symbolic.factorize_numeric_llt_scratch::<f64>(par, Default::default()));
+        symbolic
+            .factorize_numeric_llt(
+                &mut values,
+                m.as_ref(),
+                Side::Lower,
+                Default::default(),
+                par,
+                MemStack::new(&mut buf),
+                Default::default(),
+            )
+            .ok()?;
+        Some(Llt { symbolic, values })
+    }
+
+    /// Solves `AᵀA x = Aᵀb`. Returns `false` if the result isn't finite.
+    fn solve(&self, a: &SparseRows, b: &[f64], x: &mut [f64]) -> bool {
+        use faer::dyn_stack::{MemBuffer, MemStack};
+        use faer::sparse::linalg::cholesky::LltRef;
+        use faer::{Conj, MatMut, Par};
+
+        let n = a.ncols;
+        let mut atb = vec![0.0; n];
+        a.mul_t(&b[..a.nrows()], &mut atb);
+        let par = Par::Seq;
+        let mut buf = MemBuffer::new(self.symbolic.solve_in_place_scratch::<f64>(1, par));
+        LltRef::new(&self.symbolic, &self.values).solve_in_place_with_conj(
+            Conj::No,
+            MatMut::from_column_major_slice_mut(&mut atb, n, 1),
+            par,
+            MemStack::new(&mut buf),
+        );
+        x.copy_from_slice(&atb);
+        atb.iter().all(|v| v.is_finite())
+    }
 }
 
 /// Lower triangle of a symmetric matrix in compressed sparse column form,
@@ -139,10 +212,10 @@ struct LowerCsc {
     vals: Vec<f64>,
 }
 
-/// Assembles the lower triangle of `AᵀA` and `Aᵀb`, column by column with a
+/// Assembles the lower triangle of `AᵀA`, column by column with a
 /// dense accumulator (no global sort of `O(nnz²)` triplets).
 #[cfg(feature = "direct-solver")]
-fn normal_equations(a: &SparseRows, b: &[f64]) -> (LowerCsc, Vec<f64>) {
+fn normal_equations(a: &SparseRows) -> LowerCsc {
     let n = a.ncols;
     // Aᵀ as column lists of (row, value).
     let mut t_ptr = vec![0usize; n + 1];
@@ -155,14 +228,12 @@ fn normal_equations(a: &SparseRows, b: &[f64]) -> (LowerCsc, Vec<f64>) {
     let mut fill = t_ptr.clone();
     let mut t_row = vec![0u32; a.cols.len()];
     let mut t_val = vec![0.0; a.cols.len()];
-    let mut atb = vec![0.0; n];
-    for (r, &b_r) in b[..a.nrows()].iter().enumerate() {
+    for r in 0..a.nrows() {
         for k in a.row_ptr[r]..a.row_ptr[r + 1] {
             let c = a.cols[k] as usize;
             t_row[fill[c]] = r as u32;
             t_val[fill[c]] = a.vals[k];
             fill[c] += 1;
-            atb[c] += a.vals[k] * b_r;
         }
     }
 
@@ -199,7 +270,7 @@ fn normal_equations(a: &SparseRows, b: &[f64]) -> (LowerCsc, Vec<f64>) {
         }
         out.col_ptr.push(out.row_idx.len());
     }
-    (out, atb)
+    out
 }
 
 fn dot(a: &[f64], b: &[f64]) -> f64 {
@@ -280,7 +351,7 @@ mod tests {
             a.end_row();
         }
         let b = [1.0, 2.0, 3.0, 4.0];
-        let (lower, atb) = normal_equations(&a, &b);
+        let lower = normal_equations(&a);
         let dense = |i: usize, j: usize| -> f64 {
             rows.iter()
                 .map(|r| {
@@ -299,7 +370,9 @@ mod tests {
                 .collect();
             assert_eq!(col, expect, "column {j}");
         }
-        assert_eq!(atb, vec![16.0, 36.0, 26.0]);
+        let mut atb = [0.0; 3];
+        a.mul_t(&b, &mut atb);
+        assert_eq!(atb, [16.0, 36.0, 26.0]);
     }
 
     #[test]

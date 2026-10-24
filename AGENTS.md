@@ -1,6 +1,6 @@
 # uvunwrap: agent instructions
 
-Pure-Rust automatic UV unwrapper (xatlas-like): segmentation → LSCM
+Pure-Rust automatic UV unwrapper (xatlas-like): segmentation → LSCM + ARAP
 parameterization → atlas packing. Bevy is the primary consumer: lightmaps
 from `ATTRIBUTE_UV_1` (`Lightmap { image, uv_rect }`), second UV sets for
 procedural meshes, texture painting and decals. xatlas's feature set as
@@ -82,7 +82,11 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   charts and smooth single-face teeth off boundaries. `components` gives the
   UV islands of meshes with input UVs (no segmentation).
 - `src/param.rs`: planar projection if flat, else LSCM; validate (no flips, no
-  overlaps via grid + SAT, area ratio ≤ `max_area_distortion`); on failure
+  overlaps via grid + SAT, area ratio ≤ `max_area_distortion`); a valid LSCM
+  result is refined by `arap` (10 local/global iterations, area-weighted
+  Jacobian-vs-rotation energy, one `Factored` matrix for u and v; the latest
+  flip-free iterate that validates, trying only the latest and the first,
+  else the LSCM result); on failure
   split chart in two (graph-distance Voronoi, seeded at the overlapping pair
   when validation found an overlap; whole polygons go to one side, so only
   a single polygon that folds over itself is ever split) and retry, halves
@@ -97,8 +101,10 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   so reports are serialized and monotonic, plus an `AtomicBool` that
   parameterization polls; `QUIET` for nested packing).
 - `src/solver.rs`: sparse rows, `least_squares` = faer supernodal sparse
-  Cholesky on normal equations (AᵀA assembled directly in CSC;
+  Cholesky on normal equations (`Llt`; AᵀA assembled directly in CSC;
   `direct-solver` feature) with Jacobi-preconditioned CGLS fallback.
+  `Factored`: one factorization for many right-hand sides (ARAP), or CGLS
+  capped per solve and warm-started without the direct solver.
 - `src/raster.rs`: shared by both packers: `rasterize_chart` (conservative
   rasterization + square padding dilation into a `Bits` bitmap) and texel
   geometry (`content_size`, `rotate_texel`).

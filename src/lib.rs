@@ -9,7 +9,8 @@
 //! 1. **Segmentation** — faces are grouped into charts by region growing within
 //!    a normal cone ([`Options::max_chart_angle`]).
 //! 2. **Parameterization** — each chart is flattened with Least Squares
-//!    Conformal Maps (or planar projection when flat). Results with flipped
+//!    Conformal Maps refined by as-rigid-as-possible iterations, which even
+//!    out area distortion (or planar projection when flat). Results with flipped
 //!    triangles, self-overlap or too much area distortion
 //!    ([`Options::max_area_distortion`]) are split and retried, so the output is
 //!    always valid.

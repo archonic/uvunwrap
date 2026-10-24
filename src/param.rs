@@ -164,16 +164,36 @@ fn parameterize_group(job: &Job, faces: Vec<u32>) -> Vec<Chart> {
         if job.ctx.is_cancelled() {
             return Vec::new(); // the solve can't be interrupted, but validation can be skipped
         }
-        match validate(topo, &faces, &local, &conformal, max_distortion) {
-            Ok(()) => {
-                let accept = |uv: &[V2]| validate(topo, &faces, &local, uv, max_distortion).is_ok();
-                let uvs = arap(topo, &verts, &local, &conformal, accept).unwrap_or(conformal);
-                return job.done(faces, verts, local, uvs);
-            }
-            Err(Rejection::Overlap(a, b)) => overlap = Some((a, b)),
-            Err(Rejection::Invalid) => {}
+        let conformal_valid = validate(topo, &faces, &local, &conformal, max_distortion);
+        if let Err(Rejection::Overlap(a, b)) = conformal_valid {
+            overlap = Some((a, b));
         }
-        if validate(topo, &faces, &local, &planar, max_distortion).is_ok() {
+        // ARAP also gets LSCM results rejected for flips, overlaps or
+        // distortion: it often fixes them, which saves a split.
+        if conformal
+            .iter()
+            .all(|p| p[0].is_finite() && p[1].is_finite())
+        {
+            let accept = |uv: &[V2]| validate(topo, &faces, &local, uv, max_distortion).is_ok();
+            match arap(topo, &verts, &local, &conformal, accept) {
+                Ok(uvs) => return job.done(faces, verts, local, uvs),
+                Err(last) if conformal_valid.is_ok() => {
+                    if mean_distortion(topo, &faces, &local, &conformal) <= SPLIT_DISTORTION {
+                        return job.done(faces, verts, local, conformal);
+                    }
+                    // Too distorted to keep: split where ARAP's result overlaps.
+                    if let Err(Rejection::Overlap(a, b)) =
+                        validate(topo, &faces, &local, &last, max_distortion)
+                    {
+                        overlap = Some((a, b));
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        if conformal_valid.is_err()
+            && validate(topo, &faces, &local, &planar, max_distortion).is_ok()
+        {
             return job.done(faces, verts, local, planar);
         }
     }
@@ -370,6 +390,34 @@ fn lscm(topo: &Topology, verts: &[u32], local: &[[u32; 3]], init: &[V2]) -> Vec<
         .collect()
 }
 
+/// Mean area distortion ([`mean_distortion`]) above which a valid LSCM result
+/// that [`arap`] can't improve validly is split rather than kept. Measured
+/// results are the same anywhere in 1.05–1.1; chart counts barely change.
+const SPLIT_DISTORTION: f64 = 1.05;
+
+/// Area-weighted mean of max(r, 1/r) over the chart's faces, r being a face's
+/// share of UV area over its share of surface area (1 = no area distortion).
+fn mean_distortion(topo: &Topology, faces: &[u32], local: &[[u32; 3]], uv: &[V2]) -> f64 {
+    let total_uv = total_area(local, uv);
+    let total_3d: f64 = faces.iter().map(|&f| topo.areas[f as usize]).sum();
+    let scale = total_3d / total_uv;
+    let sum: f64 = local
+        .iter()
+        .zip(faces)
+        .map(|(t, &f)| {
+            let a = topo.areas[f as usize];
+            let r =
+                signed_area(uv[t[0] as usize], uv[t[1] as usize], uv[t[2] as usize]) * scale / a;
+            if a > 0.0 {
+                a * r.max(1.0 / r)
+            } else {
+                0.0
+            }
+        })
+        .sum();
+    sum / total_3d
+}
+
 /// Local/global iterations of [`arap`].
 const ARAP_ITERATIONS: usize = 10;
 /// CGLS iterations per [`arap`] global step without the direct solver. Each
@@ -386,17 +434,18 @@ const ARAP_CGLS_ITERATIONS: usize = 100;
 /// evens out the area distortion at a small cost in angle distortion.
 /// Iterates can flip or overlap, so the result is the latest flip-free
 /// iterate that `accept`s, trying only the latest and the first (validation
-/// is the expensive part); `None` if neither is accepted.
+/// is the expensive part); if neither is accepted, `Err` with the last
+/// iterate (to find where it overlaps).
 fn arap(
     topo: &Topology,
     verts: &[u32],
     local: &[[u32; 3]],
     init: &[V2],
     accept: impl Fn(&[V2]) -> bool,
-) -> Option<Vec<V2>> {
+) -> Result<Vec<V2>, Vec<V2>> {
     let n = verts.len();
     if n < 3 {
-        return None;
+        return Err(init.to_vec());
     }
     // Per triangle, the rows of its gradient operator in its own frame
     // (p0 = 0, p1 = (x1, 0), p2 = (x2, y2)), scaled by sqrt(area), and that
@@ -425,7 +474,7 @@ fn arap(
     let area_3d: f64 = grads.iter().map(|g| g.2 * g.2).sum();
     let area_uv = total_area(local, init);
     if !(area_uv > 0.0) {
-        return None;
+        return Err(init.to_vec());
     }
     let k = (area_3d / area_uv).sqrt();
     let mut uv: Vec<V2> = init.iter().map(|p| [p[0] * k, p[1] * k]).collect();
@@ -491,7 +540,11 @@ fn arap(
             }
         }
     }
-    [latest, first].into_iter().flatten().find(|uv| accept(uv))
+    [latest, first]
+        .into_iter()
+        .flatten()
+        .find(|uv| accept(uv))
+        .ok_or(uv)
 }
 
 /// Accepts a parameterization only if no triangle is flipped or degenerate, the

@@ -82,11 +82,14 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   charts and smooth single-face teeth off boundaries. `components` gives the
   UV islands of meshes with input UVs (no segmentation).
 - `src/param.rs`: planar projection if flat, else LSCM; validate (no flips, no
-  overlaps via grid + SAT, area ratio ≤ `max_area_distortion`); a valid LSCM
-  result is refined by `arap` (10 local/global iterations, area-weighted
-  Jacobian-vs-rotation energy, one `Factored` matrix for u and v; the latest
-  flip-free iterate that validates, trying only the latest and the first,
-  else the LSCM result); on failure
+  overlaps via grid + SAT, area ratio ≤ `max_area_distortion`); the LSCM
+  result, valid or not, is refined by `arap` (10 local/global iterations,
+  area-weighted Jacobian-vs-rotation energy, one `Factored` matrix for u and
+  v; the latest flip-free iterate that validates, trying only the latest and
+  the first). If ARAP fails, a valid LSCM result is kept unless its
+  `mean_distortion` exceeds `SPLIT_DISTORTION` (1.05), in which case the
+  chart is split, seeded where ARAP's last iterate overlaps; an invalid one
+  falls back to planar projection. On failure
   split chart in two (graph-distance Voronoi, seeded at the overlapping pair
   when validation found an overlap; whole polygons go to one side, so only
   a single polygon that folds over itself is ever split) and retry, halves

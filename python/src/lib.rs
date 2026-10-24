@@ -225,6 +225,8 @@ fn options(
     packing: &str,
     max_chart_angle: f32,
     max_area_distortion: f32,
+    max_chart_area: f32,
+    max_boundary_length: f32,
     allow_rotation: bool,
     max_chart_size: u32,
     block_align: bool,
@@ -259,6 +261,8 @@ fn options(
         packing,
         max_chart_angle,
         max_area_distortion,
+        max_chart_area,
+        max_boundary_length,
         allow_rotation,
         max_chart_size,
         block_align,
@@ -425,8 +429,8 @@ impl Atlas {
 #[pyfunction]
 #[pyo3(signature = (
     meshes, *, page_size=Some(1024), texels_per_unit=None, padding=2, packing="shape",
-    max_chart_angle=70.0, max_area_distortion=4.0, allow_rotation=true,
-    max_chart_size=0, block_align=false,
+    max_chart_angle=70.0, max_area_distortion=4.0, max_chart_area=0.0,
+    max_boundary_length=0.0, allow_rotation=true, max_chart_size=0, block_align=false,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn generate(
@@ -438,6 +442,8 @@ fn generate(
     packing: &str,
     max_chart_angle: f32,
     max_area_distortion: f32,
+    max_chart_area: f32,
+    max_boundary_length: f32,
     allow_rotation: bool,
     max_chart_size: u32,
     block_align: bool,
@@ -449,6 +455,8 @@ fn generate(
         packing,
         max_chart_angle,
         max_area_distortion,
+        max_chart_area,
+        max_boundary_length,
         allow_rotation,
         max_chart_size,
         block_align,
@@ -540,8 +548,8 @@ impl Job {
 #[pyfunction]
 #[pyo3(signature = (
     meshes, *, page_size=Some(1024), texels_per_unit=None, padding=2, packing="shape",
-    max_chart_angle=70.0, max_area_distortion=4.0, allow_rotation=true,
-    max_chart_size=0, block_align=false,
+    max_chart_angle=70.0, max_area_distortion=4.0, max_chart_area=0.0,
+    max_boundary_length=0.0, allow_rotation=true, max_chart_size=0, block_align=false,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn start(
@@ -552,6 +560,8 @@ fn start(
     packing: &str,
     max_chart_angle: f32,
     max_area_distortion: f32,
+    max_chart_area: f32,
+    max_boundary_length: f32,
     allow_rotation: bool,
     max_chart_size: u32,
     block_align: bool,
@@ -563,6 +573,8 @@ fn start(
         packing,
         max_chart_angle,
         max_area_distortion,
+        max_chart_area,
+        max_boundary_length,
         allow_rotation,
         max_chart_size,
         block_align,

@@ -70,6 +70,15 @@ struct Unwrapped {
     charts: Vec<param::Chart>,
 }
 
+/// An optional limit as a bound: `0` is none.
+fn limit(x: f32) -> f64 {
+    if x > 0.0 {
+        x as f64
+    } else {
+        f64::INFINITY
+    }
+}
+
 /// Welds, segments and parameterizes every mesh, meshes and charts in
 /// parallel.
 fn unwrap_meshes(
@@ -77,7 +86,11 @@ fn unwrap_meshes(
     options: &Options,
     ctx: &Ctx,
 ) -> Result<Vec<Unwrapped>, Error> {
-    let max_angle = (options.max_chart_angle as f64).to_radians();
+    let limits = segment::Limits {
+        max_angle: (options.max_chart_angle as f64).to_radians(),
+        max_area: limit(options.max_chart_area),
+        max_boundary: limit(options.max_boundary_length),
+    };
     let max_distortion = options.max_area_distortion as f64;
     let segmented = par::map_ref(meshes, |m| {
         if ctx.is_cancelled() {
@@ -87,7 +100,7 @@ fn unwrap_meshes(
         let groups = if m.existing_uvs.is_some() {
             segment::components(&topo)
         } else {
-            segment::segment(&topo, max_angle)
+            segment::segment(&topo, &limits)
         };
         ctx.advance(progress::Stage::Segmenting, 1, Some(meshes.len()))?;
         Ok((topo, groups))

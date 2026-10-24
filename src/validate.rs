@@ -18,6 +18,12 @@ pub(crate) fn options(o: &Options) -> Result<(), Error> {
     if !(o.max_area_distortion >= 1.0 && o.max_area_distortion.is_finite()) {
         return invalid("max_area_distortion", "finite and >= 1");
     }
+    if !(o.max_chart_area >= 0.0 && o.max_chart_area.is_finite()) {
+        return invalid("max_chart_area", "finite and >= 0");
+    }
+    if !(o.max_boundary_length >= 0.0 && o.max_boundary_length.is_finite()) {
+        return invalid("max_boundary_length", "finite and >= 0");
+    }
     let page_size = match o.density {
         Density::Auto { page_size } => Some(page_size),
         Density::Fixed {

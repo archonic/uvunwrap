@@ -13,6 +13,9 @@
 //! - **creases**: a penalty for growing across sharp edges, so seams follow
 //!   creases instead of cutting through smooth areas.
 //!
+//! Charts never grow, merge or take teeth beyond the optional area and
+//! boundary-length limits ([`Limits`]); only a single region can exceed them.
+//!
 //! Finally, small charts mostly enclosed by a neighbor are merged into it,
 //! and single-face teeth are moved off chart boundaries. For meshes with input
 //! UVs, [`components`] gives the UV islands instead (no segmentation).
@@ -29,6 +32,30 @@ const CREASE_WEIGHT: f64 = 4.0;
 const MAX_COST: f64 = 2.0;
 /// Rounds of normal smoothing before segmentation.
 const SMOOTHING_ROUNDS: usize = 8;
+
+/// What a chart may become.
+pub(crate) struct Limits {
+    /// Largest angle in radians between a face normal and the chart's
+    /// average normal.
+    pub max_angle: f64,
+    /// Largest chart surface area (infinite: no limit).
+    pub max_area: f64,
+    /// Largest chart boundary length (infinite: no limit).
+    pub max_boundary: f64,
+}
+
+/// [`Limits`] with the angle as a cosine.
+struct Bounds {
+    cos_max: f64,
+    max_area: f64,
+    max_boundary: f64,
+}
+
+impl Bounds {
+    fn allow(&self, area: f64, boundary: f64) -> bool {
+        area <= self.max_area && boundary <= self.max_boundary
+    }
+}
 
 struct Candidate {
     cost: f64,
@@ -230,10 +257,10 @@ fn cost(
     c: u32,
     st: &ChartState,
     r: usize,
-    cos_max: f64,
+    bounds: &Bounds,
 ) -> Option<f64> {
     let d = dot3(reg.normal[r], st.normal());
-    if d < cos_max {
+    if d < bounds.cos_max {
         return None;
     }
     let (mut l_in, mut crease) = (0.0, 0.0);
@@ -249,6 +276,9 @@ fn cost(
     let l_out = reg.perimeter[r] - l_in;
     let new_area = st.area + reg.area[r];
     let new_boundary = (st.boundary + l_out - l_in).max(0.0);
+    if !bounds.allow(new_area, new_boundary) {
+        return None;
+    }
     let roundness = if st.boundary > 0.0 && new_boundary > 0.0 {
         1.0 - (st.boundary * st.boundary / st.area) / (new_boundary * new_boundary / new_area)
     } else {
@@ -290,14 +320,19 @@ pub(crate) fn components(topo: &Topology) -> Vec<Vec<u32>> {
 }
 
 /// Splits the non-excluded faces into connected charts whose (smoothed)
-/// face normals lie within `max_angle` radians of the chart's average normal.
-pub(crate) fn segment(topo: &Topology, max_angle: f64) -> Vec<Vec<u32>> {
+/// face normals lie within `limits.max_angle` of the chart's average normal,
+/// within its area and boundary limits.
+pub(crate) fn segment(topo: &Topology, limits: &Limits) -> Vec<Vec<u32>> {
     let smooth = smoothed_normals(topo, SMOOTHING_ROUNDS);
-    segment_regions(topo, &build_regions(topo, &smooth), max_angle)
+    segment_regions(topo, &build_regions(topo, &smooth), limits)
 }
 
-fn segment_regions(topo: &Topology, reg: &Regions, max_angle: f64) -> Vec<Vec<u32>> {
-    let cos_max = crate::geom::cos(max_angle);
+fn segment_regions(topo: &Topology, reg: &Regions, limits: &Limits) -> Vec<Vec<u32>> {
+    let bounds = Bounds {
+        cos_max: crate::geom::cos(limits.max_angle),
+        max_area: limits.max_area,
+        max_boundary: limits.max_boundary,
+    };
     let nr = reg.faces.len();
     let mut chart_of = vec![NONE; nr];
     let mut order: Vec<u32> = (0..nr as u32).collect();
@@ -329,7 +364,7 @@ fn segment_regions(topo: &Topology, reg: &Regions, max_angle: f64) -> Vec<Vec<u3
                 for l in &reg.links[r] {
                     let o = l.other as usize;
                     if chart_of[o] == NONE {
-                        if let Some(cost) = cost(reg, chart_of, c, st, o, cos_max) {
+                        if let Some(cost) = cost(reg, chart_of, c, st, o, &bounds) {
                             heap.push(Candidate {
                                 cost,
                                 region: o as u32,
@@ -349,7 +384,7 @@ fn segment_regions(topo: &Topology, reg: &Regions, max_angle: f64) -> Vec<Vec<u3
                 continue;
             }
             // The chart changed since this was queued: re-evaluate lazily.
-            let Some(now) = cost(reg, &chart_of, c, &st, r, cos_max) else {
+            let Some(now) = cost(reg, &chart_of, c, &st, r, &bounds) else {
                 continue;
             };
             if now > queued + 1e-9 {
@@ -372,7 +407,7 @@ fn segment_regions(topo: &Topology, reg: &Regions, max_angle: f64) -> Vec<Vec<u3
         states.push(st);
     }
 
-    merge_charts(reg, &mut chart_of, &mut charts, &mut states, cos_max);
+    merge_charts(reg, &mut chart_of, &mut charts, &mut states, &bounds);
 
     let mut face_chart: Vec<u32> = reg
         .of_face
@@ -385,7 +420,7 @@ fn segment_regions(topo: &Topology, reg: &Regions, max_angle: f64) -> Vec<Vec<u3
             }
         })
         .collect();
-    smooth_boundaries(topo, reg, &mut face_chart, &states, cos_max);
+    smooth_boundaries(topo, reg, &mut face_chart, &mut states, &bounds);
 
     // Excluded faces have no region, hence no chart.
     let mut out: Vec<Vec<u32>> = vec![Vec::new(); charts.len()];
@@ -401,12 +436,13 @@ fn segment_regions(topo: &Topology, reg: &Regions, max_angle: f64) -> Vec<Vec<u3
 /// Moves single-face teeth to the chart they stick into: a face with at most
 /// one edge neighbor in its own chart and at least two in another one. Such a
 /// face is a leaf of its chart, so moving it never disconnects the chart.
+/// Keeps `states`' areas and boundaries up to date (normals stay as they were).
 fn smooth_boundaries(
     topo: &Topology,
     reg: &Regions,
     face_chart: &mut [u32],
-    states: &[ChartState],
-    cos_max: f64,
+    states: &mut [ChartState],
+    bounds: &Bounds,
 ) {
     let normals: Vec<V3> = states.iter().map(|s| s.normal()).collect();
     for _ in 0..4 {
@@ -435,10 +471,35 @@ fn smooth_boundaries(
             } else {
                 continue;
             };
-            if dot3(reg.normal[r as usize], normals[other as usize]) >= cos_max {
-                face_chart[f] = other;
-                moved = true;
+            if dot3(reg.normal[r as usize], normals[other as usize]) < bounds.cos_max {
+                continue;
             }
+            // Edge lengths shared with each chart, and the face's perimeter.
+            let (mut to_other, mut to_own, mut perimeter) = (0.0, 0.0, 0.0);
+            for (e, &c) in nb.iter().enumerate() {
+                let len = edge_len(topo, f, e);
+                perimeter += len;
+                if c == other {
+                    to_other += len;
+                } else if c == own {
+                    to_own += len;
+                }
+            }
+            let (o, w) = (other as usize, own as usize);
+            let area = topo.areas[f];
+            let other_boundary = (states[o].boundary + perimeter - 2.0 * to_other).max(0.0);
+            let own_boundary = (states[w].boundary - perimeter + 2.0 * to_own).max(0.0);
+            if !bounds.allow(states[o].area + area, other_boundary)
+                || !bounds.allow(states[w].area, own_boundary)
+            {
+                continue;
+            }
+            states[o].area += area;
+            states[o].boundary = other_boundary;
+            states[w].area -= area;
+            states[w].boundary = own_boundary;
+            face_chart[f] = other;
+            moved = true;
         }
         if !moved {
             break;
@@ -453,7 +514,7 @@ fn merge_charts(
     chart_of: &mut [u32],
     charts: &mut [Vec<u32>],
     states: &mut [ChartState],
-    cos_max: f64,
+    bounds: &Bounds,
 ) {
     let total_area: f64 = states.iter().map(|s| s.area).sum();
     let live = charts.len();
@@ -498,6 +559,11 @@ fn merge_charts(
                 continue;
             }
             let n = n as usize;
+            let area = states[n].area + states[c].area;
+            let boundary = (states[n].boundary + states[c].boundary - 2.0 * len).max(0.0);
+            if !bounds.allow(area, boundary) {
+                continue;
+            }
             let nsum = add3(states[c].nsum, states[n].nsum);
             let Some(axis) = normalize3(nsum) else {
                 continue;
@@ -505,7 +571,7 @@ fn merge_charts(
             let fits = |members: &[u32]| {
                 members
                     .iter()
-                    .all(|&r| dot3(reg.normal[r as usize], axis) >= cos_max)
+                    .all(|&r| dot3(reg.normal[r as usize], axis) >= bounds.cos_max)
             };
             if !fits(&charts[c]) || !fits(&charts[n]) {
                 continue;
@@ -517,8 +583,8 @@ fn merge_charts(
             charts[n].extend(moved);
             states[n] = ChartState {
                 nsum,
-                area: states[n].area + states[c].area,
-                boundary: (states[n].boundary + states[c].boundary - 2.0 * len).max(0.0),
+                area,
+                boundary,
             };
             merged_any = true;
         }

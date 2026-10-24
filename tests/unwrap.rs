@@ -221,3 +221,61 @@ fn curved_charts_keep_texel_density_even() {
         assert!(mean < 1.1, "mean area distortion {mean}");
     }
 }
+
+#[test]
+fn chart_area_and_boundary_limits() {
+    // Per chart: surface area, and the length of edges whose other side is
+    // another chart, no chart or nothing (by position, as the input welds).
+    // Degenerate faces (the sphere's poles) have no chart of their own.
+    let measure = |m: &Mesh, out: &OutputMesh| {
+        let mut charts: std::collections::HashMap<u32, (f64, f64)> = Default::default();
+        let mut edges: std::collections::HashMap<[[u32; 3]; 2], Vec<usize>> = Default::default();
+        let key = |v: u32| m.positions[v as usize].map(f32::to_bits);
+        for f in 0..m.faces() {
+            let Some(c) = face_chart(out, f).filter(|_| face_area(m, f) > 1e-9) else {
+                continue;
+            };
+            charts.entry(c).or_default().0 += face_area(m, f);
+            for k in 0..3 {
+                let (a, b) = (
+                    key(m.indices[f * 3 + k]),
+                    key(m.indices[f * 3 + (k + 1) % 3]),
+                );
+                edges.entry([a.min(b), a.max(b)]).or_default().push(f);
+            }
+        }
+        for (&[a, b], faces) in &edges {
+            let len = (0..3)
+                .map(|k| (f32::from_bits(a[k]) as f64 - f32::from_bits(b[k]) as f64).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            for &f in faces {
+                let c = face_chart(out, f);
+                if faces.iter().filter(|&&g| face_chart(out, g) == c).count() < 2 {
+                    charts.get_mut(&c.unwrap()).unwrap().1 += len;
+                }
+            }
+        }
+        charts
+    };
+    let m = sphere(32, 16); // area ≈ 4π, no two faces coplanar
+    let free = run(&[&m], &Options::default());
+    let largest = |a: &Atlas, i: usize| {
+        measure(&m, &a.meshes[0])
+            .values()
+            .map(|c| [c.0, c.1][i])
+            .fold(0.0, f64::max)
+    };
+    for (i, limit) in [(0, 1.0f32), (1, 3.0)] {
+        assert!(largest(&free, i) > limit as f64 * 1.5);
+        let opts = Options {
+            max_chart_area: if i == 0 { limit } else { 0.0 },
+            max_boundary_length: if i == 1 { limit } else { 0.0 },
+            ..Options::default()
+        };
+        let limited = run(&[&m], &opts);
+        assert!(limited.chart_count > free.chart_count);
+        let worst = largest(&limited, i);
+        assert!(worst <= limit as f64 * 1.0001, "limit {limit}: {worst}");
+    }
+}

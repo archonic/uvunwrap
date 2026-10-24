@@ -221,6 +221,18 @@ pub struct Options {
     /// relative surface area (in either direction). Charts exceeding it are
     /// split. Must be `>= 1`. Default `4`.
     pub max_area_distortion: f32,
+    /// Largest chart surface area in world units (after
+    /// [`MeshInput::scale`]; `0`: no limit). Charts don't grow beyond it,
+    /// except that a flat region or a [`polygon`](MeshInput::polygons) is
+    /// never cut, however large. Doesn't apply to the islands of
+    /// [`MeshInput::existing_uvs`]. Must be finite and `>= 0`. Default `0`.
+    pub max_chart_area: f32,
+    /// Largest chart boundary length in world units, like
+    /// [`max_chart_area`](Self::max_chart_area) (`0`: no limit). This limits
+    /// segmentation: a chart split later because it can't be flattened in
+    /// one piece can end up with a longer boundary. Must be finite and
+    /// `>= 0`. Default `0`.
+    pub max_boundary_length: f32,
     /// Texel density and page size. Default [`Density::Auto`] with 1024-texel
     /// pages.
     pub density: Density,
@@ -267,6 +279,8 @@ impl Default for Options {
         Options {
             max_chart_angle: 70.0,
             max_area_distortion: 4.0,
+            max_chart_area: 0.0,
+            max_boundary_length: 0.0,
             density: Density::default(),
             padding: 2,
             allow_rotation: true,

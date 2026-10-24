@@ -192,6 +192,17 @@ fn random_options(rng: &mut Rng) -> Options {
             0
         },
         block_align,
+        // Last, so the other options stay as they were for each seed.
+        max_chart_area: if rng.below(4) == 0 {
+            rng.range(0.05, 2.0)
+        } else {
+            0.0
+        },
+        max_boundary_length: if rng.below(4) == 0 {
+            rng.range(0.5, 6.0)
+        } else {
+            0.0
+        },
     }
 }
 

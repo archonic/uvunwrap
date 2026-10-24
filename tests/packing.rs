@@ -314,6 +314,20 @@ fn invalid_options_name_the_option() {
             },
             "density.page_size",
         ),
+        (
+            Options {
+                max_chart_area: -1.0,
+                ..o
+            },
+            "max_chart_area",
+        ),
+        (
+            Options {
+                max_boundary_length: f32::NAN,
+                ..o
+            },
+            "max_boundary_length",
+        ),
     ] {
         match generate(&[], &bad) {
             Err(Error::InvalidOption { option, .. }) => assert_eq!(option, name, "{bad:?}"),

@@ -107,6 +107,11 @@ def test_options():
     assert (pages.width, pages.height, pages.page_count) == (128, 128, 3)
     aligned = uvunwrap.generate([mesh], block_align=True, page_size=256, packing="fast")
     assert aligned.width % 4 == 0 and aligned.height % 4 == 0
+    free = uvunwrap.generate([mesh]).chart_count
+    assert uvunwrap.generate([mesh], max_chart_area=0.2).chart_count > free
+    assert uvunwrap.generate([mesh], max_boundary_length=1.5).chart_count > free
+    with pytest.raises(uvunwrap.UnwrapError, match="max_chart_area"):
+        uvunwrap.generate([mesh], max_chart_area=-1.0)
     with pytest.raises(ValueError, match="packing"):
         uvunwrap.generate([mesh], packing="tight")
     with pytest.raises(ValueError, match="page_size is required"):

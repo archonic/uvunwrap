@@ -59,6 +59,8 @@ Keyword arguments of `generate` and `start`:
 | `packing` | `"shape"` | `"shape"` (densest) or `"fast"` (milliseconds for thousands of charts). |
 | `max_chart_angle` | `70.0` | Maximum angle in degrees between a face and its chart's average normal. |
 | `max_area_distortion` | `4.0` | Maximum per-triangle area distortion before a chart is split. |
+| `max_chart_area` | `0.0` | Largest chart surface area in world units (`0`: no limit). |
+| `max_boundary_length` | `0.0` | Largest chart boundary length in world units (`0`: no limit). |
 | `allow_rotation` | `True` | Rotate charts by multiples of 90° while packing. |
 | `max_chart_size` | `0` | Largest chart side in texels (`0`: no limit). |
 | `block_align` | `False` | Give every chart whole 4×4 texel blocks (for BC/ASTC compression). |

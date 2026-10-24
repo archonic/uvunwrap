@@ -51,6 +51,7 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   `face_materials`/`ignored_faces`/`seams`/`polygons`/`scale`/
   `instance_scales`/`existing_uvs`,
   `Options` with `Density::{Auto, Fixed}` and `Packing::{Shape, Fast}`,
+  `max_chart_area`/`max_boundary_length` (0: no limit),
   `Atlas`, `OutputMesh`, `OutputVertex` (`page: Option`), `InstanceRect`.
 - `src/error.rs`: `Error` (re-exported), naming the offending
   option/array/instance. `src/validate.rs`: every documented input
@@ -80,7 +81,9 @@ Plans, status, benchmark results and experiment history go in `TODO.md`
   faces always share a region, so charts never split a polygon): cost = normal
   deviation (crease-preserving smoothed normals, hard `max_chart_angle` cone)
   + straightness + roundness + crease penalty; then merge small enclosed
-  charts and smooth single-face teeth off boundaries. `components` gives the
+  charts and smooth single-face teeth off boundaries. `Limits` (angle, area,
+  boundary length) bound growth, merges and tooth moves; only a single
+  region can exceed the area and length limits. `components` gives the
   UV islands of meshes with input UVs (no segmentation).
 - `src/param.rs`: planar projection if flat, else LSCM; validate (no flips, no
   overlaps via grid + SAT, area ratio ≤ `max_area_distortion`); the LSCM

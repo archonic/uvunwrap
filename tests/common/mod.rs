@@ -209,23 +209,26 @@ pub fn total_uv_area(out: &OutputMesh) -> f64 {
     (0..out.indices.len() / 3).map(|f| uv_area(out, f)).sum()
 }
 
+/// Surface area of face `f` of `m`.
+pub fn face_area(m: &Mesh, f: usize) -> f64 {
+    let p = [0, 1, 2].map(|c| m.positions[m.indices[f * 3 + c] as usize].map(f64::from));
+    let (u, v) = (
+        [0, 1, 2].map(|k| p[1][k] - p[0][k]),
+        [0, 1, 2].map(|k| p[2][k] - p[0][k]),
+    );
+    let c = [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ];
+    0.5 * (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt()
+}
+
 /// Per non-degenerate face of `m`: (face, r, 3D area), r being the face's share
 /// of its chart's UV area over its share of the chart's surface area. Faces too
 /// small for f32 UVs to measure are left out.
 pub fn area_ratios(m: &Mesh, out: &OutputMesh) -> Vec<(usize, f64, f64)> {
-    let area3 = |f: usize| {
-        let p = [0, 1, 2].map(|c| m.positions[m.indices[f * 3 + c] as usize].map(f64::from));
-        let (u, v) = (
-            [0, 1, 2].map(|k| p[1][k] - p[0][k]),
-            [0, 1, 2].map(|k| p[2][k] - p[0][k]),
-        );
-        let c = [
-            u[1] * v[2] - u[2] * v[1],
-            u[2] * v[0] - u[0] * v[2],
-            u[0] * v[1] - u[1] * v[0],
-        ];
-        0.5 * (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt()
-    };
+    let area3 = |f| face_area(m, f);
     let mut totals: std::collections::HashMap<u32, (f64, f64)> = std::collections::HashMap::new();
     for f in 0..m.faces() {
         if let Some(c) = face_chart(out, f) {

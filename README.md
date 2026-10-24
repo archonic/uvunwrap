@@ -82,13 +82,15 @@ maps such as Blender's. See [`python/`](https://github.com/archonic/uvunwrap/tre
 1. **Topology**: welds identical positions, drops triangles too thin for f32
    UVs (and ignored ones), and connects faces only across manifold,
    consistently oriented edges within one material that the input doesn't
-   split. Split edges are ignored when most edges are split (flat shading).
+   split. Split edges are ignored when most edges are split (flat shading);
+   edges marked in `seams` are always cut.
 2. **Segmentation**: grows charts from the largest planar regions, xatlas
    style: candidates are ranked by normal deviation (on crease-preserving
    smoothed normals, limited by `max_chart_angle`), with bonuses for filling
-   boundary notches and penalties for crossing creases. Small charts mostly
-   enclosed by a neighbor are merged, and single-triangle teeth are smoothed
-   off the boundaries.
+   boundary notches and penalties for crossing creases. Optional
+   `max_chart_area` and `max_boundary_length` stop charts growing past a
+   size. Small charts mostly enclosed by a neighbor are merged, and
+   single-triangle teeth are smoothed off the boundaries.
 3. **Parameterization**: planar projection for flat charts, otherwise Least
    Squares Conformal Maps solved by sparse Cholesky, then as-rigid-as-possible
    iterations that even out area distortion across the chart (texel density

@@ -96,9 +96,9 @@ maps such as Blender's. See [`python/`](https://github.com/archonic/uvunwrap/tre
    iterations that even out area distortion across the chart (texel density
    stays uniform on curved charts; kept only when valid, and also tried on
    LSCM results that fail). Results with flipped triangles, overlaps or area
-   distortion above `max_area_distortion` are split and retried, so output is
-   always valid, and so are charts left noticeably distorted. Large, strongly curved charts are
-   split without attempting a solve.
+   distortion above `max_area_distortion` are split and retried, as are
+   charts that stay noticeably distorted, so output is always valid. Large,
+   strongly curved charts are split without attempting a solve.
 4. **Packing**: charts are rotated to their minimum-area bounding rectangle,
    rasterized (conservatively, dilated by the padding) and packed by shape, so
    they nest into each other's concavities and holes, with 90° rotations.

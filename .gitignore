@@ -2,5 +2,6 @@
 /out
 /models
 /TODO.md
+/FEATURE_REQUESTS.md
 __pycache__/
 /python/dist
